@@ -63,6 +63,7 @@ function runtime() {
   const { TopicPage } = load(declarations + '\n' + page, {
     forumSession: { user: { id: 7 }, revision: 1 }, loadAppearanceSettings: () => appearance,
     TopicScrollPolicy, ActionBarButton, ButtonModifier, Scroller, Color: { Transparent: 'transparent' },
+    uiMaterial: { Material: { empty: 'empty-material' } },
     LengthMetrics: { vp: value => value }, ColorMetrics: { resourceColor: value => value },
     $r: id => ({ id }), Edge: { Top: 'top' },
     materialFor(settings) {
@@ -123,7 +124,7 @@ test('busy writes and empty content disable and restore the same button across s
   assert.deepEqual(constructed, [button]);
 });
 
-test('collapse and appearance update accessibility and material, while the retained callback honors current guards', () => {
+test('collapse and appearance preserve one material surface and accessibility, while the retained callback honors current guards', () => {
   const { reader, appearance, materials } = runtime();
   reader.posts = [{ id: 1, postNumber: 1 }];
   reader.aboutToAppear();
@@ -135,16 +136,14 @@ test('collapse and appearance update accessibility and material, while the retai
   reader.updateBackTopButton();
   assert.equal(button.accessibilityLevel, 'no-hide-descendants');
   assert.notStrictEqual(button.buttonModifier, previousModifier);
-  assert.strictEqual(button.buttonModifier.material, materials.at(-1).material);
-  assert.equal(materials.at(-1).effectLevel, 3);
-  assert.equal(materials.at(-1).themeMode, 2);
+  assert.equal(button.buttonModifier.material, 'empty-material', 'The parent container owns the only optical surface.');
+  assert.equal(materials.length, 0, 'Child controls must not construct an overlapping material or shadow.');
 
   appearance.reduceMotion = true;
   appearance.highContrast = true;
   reader.updateBackTopButton();
   assert.equal(button.accessibilityLevel, 'yes', 'Reduced motion exposes the static expanded controls.');
-  assert.equal(materials.at(-1).reduceMotion, true);
-  assert.equal(materials.at(-1).highContrast, true);
+  assert.equal(button.buttonModifier.material, 'empty-material');
   assert.strictEqual(reader.backTopButton, button);
 
   reader.loading = true;

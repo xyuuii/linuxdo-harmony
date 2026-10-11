@@ -1,34 +1,38 @@
+import { uiMaterial } from '@kit.ArkUI';
+import { deviceInfo } from '@kit.BasicServicesKit';
 import { AppearanceSettings, loadAppearanceSettings } from '../models/AppearanceSettings';
+import { materialFor, materialSupported } from '../services/MaterialPolicy';
 
-/** Read-only backing. Disabled controls and reduced motion retain a legible, visible surface. */
+/** One material on the control container; child buttons must use Material.empty. */
 @ComponentV2
 export struct ReaderGlassSurface {
   @Param appearance: AppearanceSettings = loadAppearanceSettings();
   @Param radiusVp: number = 26;
+  @BuilderParam content: () => void = this.emptyContent;
+  // API26's emulator advertises support but does not render the optical surface.
+  private nativeAvailable: boolean = deviceInfo.productModel !== 'emulator' && materialSupported();
 
   @Computed
   get usesGlass(): boolean { return this.appearance.effectLevel > 0 && !this.appearance.highContrast; }
 
   @Computed
-  get blurRadius(): number {
-    if (!this.usesGlass) { return 0; }
-    return this.appearance.effectLevel === 1 ? 16 : this.appearance.effectLevel === 2 ? 24 : 32;
-  }
+  get usesFallback(): boolean { return this.usesGlass && !this.nativeAvailable; }
+
+  @Builder
+  emptyContent() {}
 
   build() {
     Stack() {
-      Row().width('100%').height('100%').borderRadius(this.radiusVp)
-        .backgroundColor(this.usesGlass ? Color.Transparent : $r('app.color.surface'))
-        .backgroundEffect({ radius: this.blurRadius, saturation: 1.05,
-          color: this.usesGlass ? $r('app.color.reading_glass_tint') : Color.Transparent })
-      Row().width('100%').height('100%').borderRadius(this.radiusVp)
-        .linearGradient(this.usesGlass ? { direction: GradientDirection.Bottom,
-          colors: [[$r('app.color.reading_glass_highlight'), 0], [Color.Transparent, 0.5], [Color.Transparent, 1]] } : undefined)
-        .border({ width: this.appearance.highContrast ? 1 : this.usesGlass ? 0.7 : 0,
-          color: this.appearance.highContrast ? $r('app.color.text_primary') : $r('app.color.reading_glass_rim') })
+      this.content()
     }.width('100%').height('100%').borderRadius(this.radiusVp)
-      .shadow({ radius: this.usesGlass ? this.appearance.effectLevel === 1 ? 6 : 12 : 0,
-        offsetY: this.usesGlass ? 3 : 0, color: this.usesGlass ? $r('app.color.reading_glass_shadow') : Color.Transparent })
-      .hitTestBehavior(HitTestMode.None).accessibilityLevel('no-hide-descendants')
+      .backgroundColor(this.usesGlass ? Color.Transparent : $r('app.color.surface'))
+      .backgroundEffect(this.usesFallback ? {
+        radius: this.appearance.effectLevel === 1 ? 16 : this.appearance.effectLevel === 2 ? 24 : 32,
+        saturation: 1.05, color: $r('app.color.reading_glass_tint') } : undefined)
+      .border(this.appearance.highContrast ? { width: 1, color: $r('app.color.text_primary') } :
+        this.usesFallback ? { width: 0.6, color: $r('app.color.reading_glass_rim') } : undefined)
+      .shadow(this.usesFallback && this.appearance.effectLevel > 1 ? {
+        radius: 6, offsetY: 2, fill: false, color: $r('app.color.reading_glass_shadow') } : undefined)
+      .systemMaterial(this.usesGlass && this.nativeAvailable ? materialFor(this.appearance) : uiMaterial.Material.empty)
   }
 }

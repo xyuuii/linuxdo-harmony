@@ -1,4 +1,4 @@
-# 帖子阅读交互（0.2.4）
+# 帖子阅读交互（0.2.5）
 
 0.2.1参考实际手机上的酷安鸿蒙版7.1.1（com.coolapk.hmclient）：通过HDC观察用户Pura X View / HarmonyOS 7 / API 26的真实界面，采用顶部作者信息、自然铺开的正文与底部左侧评论入口、右侧常用动作组。酷安向下长滑时隐藏整条导航、反向滚动复原；本项目结合用户要求保留单按钮收起形态。参考截图只留在本机被忽略的artifacts目录，未复制酷安源码、图标或媒体资源。
 
@@ -22,7 +22,7 @@ Root与Navigation负责全窗口区域扩展，子List/Refresh不重复叠加ign
 
 ## 阅读动效
 
-使用官方有主按钮的 HdsActionBar 展开/收缩动效。向话题尾部累计滚动32vp后收缩，左侧写回复入口同步淡出并收窄；反向回读16vp后展开，点击浮动主按钮也可手动恢复。浮层不改变列表视口高度，避免收缩时跳动。按钮的ButtonModifier接入系统沉浸光感材质；独立ReaderGlassSurface提供可见毛玻璃、主题染色、高光边缘和柔阴影，HDS自身背板继续透明且关闭重复模糊。禁用状态只作用于前景按钮，不使背板消失。开启减少动态效果时移除收缩主按钮，写回复、楼层与回顶保持静态可见。
+使用官方有主按钮的 HdsActionBar 展开/收缩动效。向话题尾部累计滚动32vp后收缩，左侧写回复入口同步淡出并收窄；反向回读16vp后展开，点击浮动主按钮也可手动恢复。浮层不改变列表视口高度，避免收缩时跳动。ReaderGlassSurface包含真实按钮并承担唯一材质，子按钮的ButtonModifier使用Material.empty，HDS自身背板透明且关闭重复模糊。禁用状态只作用于前景按钮，不使材质面消失。开启减少动态效果时移除收缩主按钮，写回复、楼层与回顶保持静态可见。
 
 末尾不保留静态提示区。List启用末端Spring回弹；onWillScroll只有在真实话题加载完成、没有下一页且用户到末尾继续上拉时才跟手显示提示。单纯触底、程序滚动、惯性和回弹不触发提示；松手后使用springMotion回归，保留约3.2秒后淡出。提示带回顶按钮，工具栏也提供回顶，长首楼同样可用。尾部分页模式下重新加载首批楼层；完整首批内容已在列表中时使用scrollEdge(Edge.Top)平滑回到真实顶部，减少动态时直接回顶。看图、换账号、重新加载或离开页面清理提示及定时器。
 
@@ -63,3 +63,14 @@ ComposerPage复用唯一editorContent，半模态分支不含NavDestination；�
 ReaderGlassSurface是非交互的兄弟背板，真实背景模糊radius按轻柔/标准/丰富为16/24/32，浅色与深色各有独立tint、高光边、阴影颜色。该表面不用systemMaterial，以免系统材质接管手工背景/边框/阴影；原按钮继续使用系统材质承担触摸反馈。关闭效果时实色且无装饰阴影，高对比为实色加1vp主文字色边，减少动态仍保留静态玻璃。
 
 左背板跟随52vp回复胶囊宽度淡出收窄；右背板展开为60vp高、宽度跟随原生168/104vp frame，收起为52vp圆形，始终按native主按钮中心对齐。没有把168vp HDS frame缩到52，也没有扩大交互区域覆盖正文。原按钮的额外shadowStyle设为零半径透明，整体阴影由背板提供。业务、权限、分页、半模态回复和草稿保护未改；102项既有回归通过。
+
+
+## 0.2.5 单一材质与阴影
+
+对照[沉浸光感指南](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-immersive-light-sense)和[沉浸光感FAQ](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-immersive-light-sense-faq)：系统材质的applyShadow为true时，自带阴影优先于通用shadow，设置透明shadowStyle无法关闭它；使用系统阴影时不再额外叠加手工阴影。
+
+ReaderGlassSurface改为包含真实控件的材质容器，用无参LocalBuilder保留TopicPage的状态归属。子按钮显式使用Material.empty；材质容器保持默认触摸测试，没有兄弟只读背板或父级点击竞争。正常设备仅systemMaterial承担背景、边缘、阴影与交互；减少动态仍通过既有materialFor关闭交互光效和形变。手工渐变高光已移除。
+
+当前API26模拟器productModel为emulator，支持查询为true且报告EXQUISITE，但实测只设置systemMaterial时没有可见材质。对此模拟器以及不支持材质的设备使用互斥后备：单层backgroundEffect，主题tint、细边缘和radius6px/offsetY2px的外阴影，fill:false；轻柔、关闭和高对比不加装饰阴影。不强行改变系统材质等级，也不把模拟器后备称为真机光学效果。
+
+HdsActionBar保持168/104vp定宽与76vp外框高度；父材质面展开高60vp、收起为52vp圆形。外框高度显式保留，防止窄父容器令原生margin把图标向下推。收起面与主按钮设备实测均为[815,2424,997,2606]。真机光感仍需物理设备复验。
