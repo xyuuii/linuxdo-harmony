@@ -16,10 +16,16 @@ export struct AboutPage {
     NavDestination() {
       Scroll() {
         Column({ space: 18 }) {
-          Text('LINUX DO · 鸿蒙').fontSize(25).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary')).width('100%')
-          Text('为交流而来。').fontSize(16).fontColor($r('app.color.text_secondary')).width('100%')
+          Row({ space: 12 }) {
+            Image($r('app.media.app_icon')).width(64).height(64).objectFit(ImageFit.Contain)
+              .borderRadius(16).clip(true).id('app_brand_icon').accessibilityText('LINUX DO 光感图标')
+            Column({ space: 6 }) {
+              Text('LINUX DO · 鸿蒙').fontSize(23).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+              Text('为交流而来。').fontSize(14).fontColor($r('app.color.text_secondary'))
+            }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+          }.width('100%')
           Column({ space: 14 }) {
-            Text('版本 0.1.1 · 本地开发版本').fontColor($r('app.color.text_primary'))
+            Text('版本 0.1.2 · 本地开发版本').fontColor($r('app.color.text_primary'))
             Text(`登录状态：${forumSession.user !== undefined ? forumSession.user.username : '未登录'}`)
               .fontSize(14).fontColor($r('app.color.text_secondary'))
             Text(`沉浸材质：${materialSupported() ? '设备支持' : '使用清晰样式'}`)

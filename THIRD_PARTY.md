@@ -13,7 +13,7 @@
 
 本项目以 [Apache License 2.0](LICENSE) 发布，版权归 xyuuii 与贡献者；已有第三方版权声明保留。完整归属见 [NOTICE](NOTICE)。
 
-DevEco CLI 生成的 `EntryAbility.ets` 和 `EntryBackupAbility.ets` 保留 Huawei Device Co., Ltd. 的 Apache-2.0 头。EntryAbility 的启动配置已按本应用需求调整。未使用的模板 PNG 已移除，图标及预览背景使用本项目 SVG。
+DevEco CLI 生成的 `EntryAbility.ets` 和 `EntryBackupAbility.ets` 保留 Huawei Device Co., Ltd. 的 Apache-2.0 头。EntryAbility 的启动配置已按本应用需求调整。未使用的模板 PNG 已移除，预览背景使用本项目 SVG。应用图标的三色圆形品牌结构参考 LINUX DO 官网，由内置 ImageGen 生成材质风格演绎；详见 `docs/branding/icon-design.md`。原始品牌标识的权利不因本仓库 Apache-2.0 许可而转让。
 
 HarmonyOS SDK、HDS/ArkUI 系统组件、DevEco Studio 与 DevEco CLI 不随仓库分发，需要开发者自行安装并遵守各自使用条款。测试可以调用已安装的 TypeScript 编译运行时；CI 仅安装公开 TypeScript 4.9.5 执行离线逻辑 fixture，不分发 Huawei SDK。
 

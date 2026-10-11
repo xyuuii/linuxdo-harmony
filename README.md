@@ -9,9 +9,15 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 基于 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的真实功能与 Discourse 接口，以 ArkTS / ArkUI V2 重构的鸿蒙原生客户端。固定参考提交 `e31fe8e3a06a5de2e9c013925dd1c40a7743d30e`，源代码版本 1.1.1。
 
-本地应用版本 `0.1.1`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
+本地应用版本 `0.1.2`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
 
 0.1.1 收紧首页、分类和搜索的信息密度：话题标题最多两行，缩小卡片留白；分类等级与名称同排。分类详情移除了重复标题和不适用的底部页签预留，列表用满可用高度。首页和搜索仅在滚动末端为浮动页签留空间。
+
+## 应用图标
+
+<img src="docs/branding/app-icon.png" width="160" alt="LINUX DO 三色圆形玻璃光感图标" />
+
+0.1.2 以官网当前黑、白、黄橙三段圆形标志为参考，使用内置 ImageGen 生成玻璃边缘、柔和冷光与暖金折射质感，并接入桌面、启动页和关于页面。原始标志来源、生成方式及提示词见 [图标说明](docs/branding/icon-design.md)。
 
 ## 界面预览
 

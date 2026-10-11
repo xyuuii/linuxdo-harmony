@@ -14,5 +14,9 @@ Affected files:
   app/entry/src/main/ets/entrybackupability/EntryBackupAbility.ets
 EntryAbility has been adapted for the native application startup flow.
 
+The glass-style app icon is an AI-generated material rendition of the current
+LINUX DO black/white/amber circular mark, referenced from https://linux.do/.
+The original brand mark is not relicensed by this repository.
+
 LINUX DO, HarmonyOS and Huawei names, and forum user content belong to their
 respective owners. The software license does not grant trademark rights.
