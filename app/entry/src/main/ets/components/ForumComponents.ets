@@ -2,6 +2,7 @@ import { TopicListItem } from '../models/ForumModels';
 import { forumSession } from '../models/ForumSession';
 import { NativeForumImage } from './NativeForumImage';
 import { formatCount, relativeTime } from '../services/ForumPresentation';
+import { PINNED_PREVIEW_COUNT, visiblePinnedTopics } from '../services/TopicFeedPresentation';
 
 @ComponentV2
 export struct ForumAvatar {
@@ -63,6 +64,39 @@ export struct TopicRow {
         .id(`topic_${this.item.topic.id}`).accessibilityText(this.item.topic.title)
         .onClick(() => { if (this.item !== undefined) { this.onOpen(this.item.topic.id); } })
     }
+  }
+}
+
+@ComponentV2
+export struct PinnedTopicsBlock {
+  @Param items: TopicListItem[] = [];
+  @Event onOpen: (id: number) => void = (): void => {};
+  @Local expanded: boolean = false;
+
+  build() {
+    Column({ space: 0 }) {
+      Row({ space: 6 }) {
+        SymbolGlyph($r('sys.symbol.pin')).fontSize(13).fontColor([$r('app.color.accent')])
+        Text(`置顶 · ${this.items.length}`).fontSize(12).fontColor($r('app.color.text_secondary')).layoutWeight(1)
+        if (this.items.length > PINNED_PREVIEW_COUNT) {
+          Button(this.expanded ? '收起' : `展开全部 ${this.items.length} 条`, { type: ButtonType.Normal })
+            .fontSize(12).fontColor($r('app.color.accent')).backgroundColor(Color.Transparent)
+            .height(40).padding({ left: 8, right: 0 }).id('pinned_topics_toggle')
+            .accessibilityText(this.expanded ? '收起置顶话题' : `展开全部 ${this.items.length} 条置顶话题`)
+            .onClick(() => { this.expanded = !this.expanded; })
+        }
+      }.width('100%').constraintSize({ minHeight: 36 })
+      ForEach(visiblePinnedTopics(this.items, this.expanded), (item: TopicListItem) => {
+        Row({ space: 8 }) {
+          Text(item.topic.title).fontSize(14).fontWeight(FontWeight.Medium).lineHeight(20)
+            .fontColor($r('app.color.text_primary')).layoutWeight(1)
+          SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(11).fontColor([$r('app.color.text_secondary')])
+        }.width('100%').constraintSize({ minHeight: 44 }).padding({ top: 7, bottom: 7 })
+          .id(`pinned_topic_${item.topic.id}`).accessibilityText(`置顶话题，${item.topic.title}`)
+          .onClick(() => { this.onOpen(item.topic.id); })
+      }, (item: TopicListItem): string => String(item.topic.id))
+    }.width('100%').alignItems(HorizontalAlign.Start).padding({ left: 12, right: 12, bottom: 5 })
+      .backgroundColor($r('app.color.surface')).borderRadius(14).id('pinned_topics_block')
   }
 }
 

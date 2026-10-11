@@ -290,6 +290,7 @@ struct PostContentImage {
 export struct RichPostContent {
   @Param cooked: string = '';
   @Param compact: boolean = false;
+  @Param inlineContent: boolean = false;
   @Param reduceMotion: boolean = false;
   @Param session: ForumSession = forumSession;
   @Event onOpenLink: (url: string) => void = (_url: string): void => {};
@@ -340,7 +341,7 @@ export struct RichPostContent {
   get blocks(): PostBlock[] { return parsePostContent(this.cooked); }
 
   build() {
-    Column({ space: this.compact ? 6 : 12 }) {
+    Column({ space: this.inlineContent ? 0 : this.compact ? 6 : 12 }) {
       ForEach(this.blocks, (block: PostBlock) => {
         if (block.kind === 'divider') {
           Divider().color($r('app.color.divider')).margin({ top: 8, bottom: 8 })
@@ -353,7 +354,9 @@ export struct RichPostContent {
           Text() {
             ForEach(block.runs, (run: PostInline) => {
               if (run.emojiUrl && this.emojiUris.has(run.emojiUrl)) {
-                ImageSpan(this.emojiUris.get(run.emojiUrl) || '').width(this.compact ? 18 : 22).height(this.compact ? 18 : 22)
+                ImageSpan(this.emojiUris.get(run.emojiUrl) || '')
+                  .width(this.inlineContent ? 16 : this.compact ? 18 : 22)
+                  .height(this.inlineContent ? 16 : this.compact ? 18 : 22)
                   .verticalAlign(ImageSpanAlignment.CENTER)
               } else {
                 Span(run.text)
@@ -366,8 +369,9 @@ export struct RichPostContent {
               }
             }, (run: PostInline): string => run.key)
           }
-          .fontSize(block.heading ? 21 : this.compact ? 14 : block.kind === 'code' ? 14 : 16)
-          .lineHeight(this.compact ? 22 : 28).textAlign(TextAlign.Start).width('100%')
+          .fontSize(this.inlineContent ? 13 : block.heading ? 21 : this.compact ? 14 : block.kind === 'code' ? 14 : 16)
+          .lineHeight(this.inlineContent ? 20 : this.compact ? 22 : 28)
+          .textAlign(TextAlign.Start).width(this.inlineContent ? 'auto' : '100%')
           .copyOption(CopyOptions.InApp)
           .padding(block.quote || block.kind === 'code' ? 12 : 0)
           .backgroundColor(block.quote || block.kind === 'code' ? $r('app.color.selected_background') : Color.Transparent)
@@ -375,7 +379,7 @@ export struct RichPostContent {
           .border({ width: { left: block.quote ? 3 : 0 }, color: $r('app.color.accent') })
         }
       }, (block: PostBlock): string => block.key)
-    }.width('100%').alignItems(HorizontalAlign.Start)
+    }.width(this.inlineContent ? 'auto' : '100%').alignItems(HorizontalAlign.Start)
       .onVisibleAreaChange([0.01], (visible: boolean): void => {
         this.visible = visible;
         if (visible) { this.loadEmojis(); }

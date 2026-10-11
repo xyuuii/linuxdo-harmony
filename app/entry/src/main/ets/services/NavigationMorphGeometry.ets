@@ -13,7 +13,8 @@ function mix(start: number, end: number, progress: number): number {
 }
 
 /** Every part of the same surface uses this single, bounded progress in vp. */
-export function navigationMorphFrame(availableWidth: number, index: number, progress: number): NavigationMorphFrame {
+export function navigationMorphFrame(availableWidth: number, index: number, progress: number,
+  sideLeft: boolean = false): NavigationMorphFrame {
   const width: number = Number.isFinite(availableWidth) && availableWidth >= 52 ? availableWidth : 328;
   const value: number = Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : 0;
   const tab: number = Number.isFinite(index) ? Math.max(0, Math.min(3, Math.floor(index))) : 0;
@@ -23,7 +24,7 @@ export function navigationMorphFrame(availableWidth: number, index: number, prog
   return {
     surfaceWidth: surfaceWidth,
     surfaceHeight: mix(56, 52, value),
-    surfaceLeft: width - surfaceWidth,
+    surfaceLeft: sideLeft ? 0 : width - surfaceWidth,
     buttonWidth: buttonWidth,
     buttonLeft: center - buttonWidth / 2,
     iconTop: mix(6, 14.5, value),

@@ -1,5 +1,6 @@
 {
   "color": [
+    { "name": "boost_background", "value": "#2A2D31" },
     { "name": "touch_light_core", "value": "#B3FFFFFF" },
     { "name": "touch_light_halo", "value": "#668FC5FF" },
     { "name": "touch_light_fade", "value": "#008FC5FF" },
@@ -49,7 +50,7 @@
     },
     {
       "name": "reading_glass_tint",
-      "value": "#CC1B212C"
+      "value": "#991B212C"
     },
     {
       "name": "reading_glass_rim",

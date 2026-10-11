@@ -90,7 +90,7 @@ export enum SearchOrder {
 }
 export interface SearchPage { items: TopicListItem[]; excerpts: Map<number, string>; hasMore: boolean; }
 export enum ProfileSection {
-  Summary = 'summary', Activity = 'activity', Notifications = 'notifications', Messages = 'messages', Account = 'account'
+  Summary = 'summary', Activity = 'activity', Likes = 'likes', Notifications = 'notifications', Messages = 'messages', Account = 'account'
 }
 export enum NotificationFilter { All = 'all', Replies = 'replies', Likes = 'likes', Messages = 'messages' }
 export enum ProfileOrder { Latest = 'latest' }
@@ -106,7 +106,7 @@ export const searchOrders: SearchOrderOption[] = [
 export interface NotificationFilterOption { value: NotificationFilter; label: string; }
 export const notificationFilters: NotificationFilterOption[] = [
   { value: NotificationFilter.All, label: '全部' }, { value: NotificationFilter.Replies, label: '回复' },
-  { value: NotificationFilter.Likes, label: '点赞' }, { value: NotificationFilter.Messages, label: '私信' }
+  { value: NotificationFilter.Likes, label: '收到的赞' }, { value: NotificationFilter.Messages, label: '私信' }
 ];
 export interface ForumNotification {
   id: number;

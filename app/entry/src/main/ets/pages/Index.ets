@@ -10,6 +10,7 @@ import { forumApi, BrowserRequest, RequestCancellation, BrowserResponse } from '
 import { BrowserTransportAdapter } from '../services/BrowserTransportAdapter';
 import { allowedLoginNavigation, loginOrigin, loginPageTitle } from '../services/AuthNavigation';
 import { TopicScrollPolicy } from '../services/TopicScrollPolicy';
+import { handednessState } from '../services/HandednessState';
 import { TopicFeed } from '../components/TopicFeed';
 import { AdaptiveNavigationBar } from '../components/AdaptiveNavigationBar';
 import { EdgeBackdrop } from '../components/EdgeBackdrop';
@@ -47,6 +48,7 @@ struct Index {
   @Local currentIndex: number = 0;
   @Local paths: NavPathStack = new NavPathStack();
   @Local dataVersion: number = 0;
+  @Local latestRefreshSignal: number = 0;
   @Local showBrowser: boolean = false;
   @Local showComposer: boolean = false;
   @Local composerRoute: ForumRoute | undefined = undefined;
@@ -384,6 +386,7 @@ struct Index {
         HdsTabs({ controller: this.controller, index: this.currentIndex }) {
           TabContent() {
             TopicFeed({ appearance: this.appearance, reloadSignal: this.dataVersion + forumSession.revision,
+              refreshTopSignal: this.latestRefreshSignal,
               topInset: this.topInset, bottomInset: this.bottomInset, immersiveTop: true,
               listScroller: this.latestScroller,
               onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
@@ -455,10 +458,15 @@ struct Index {
         .hitTestBehavior(HitTestMode.None).accessibilityLevel('no-hide-descendants').zIndex(1)
 
       AdaptiveNavigationBar({ currentIndex: this.currentIndex, collapsed: this.navigationCollapsed,
+        sideLeft: handednessState.sideLeft,
         appearance: this.appearance,
         bottomInset: this.bottomInset,
         onSelect: (index: number): void => {
           this.resetNavigation(); this.currentIndex = index; this.controller.changeIndex(index);
+        },
+        onLatestDoubleTap: (): void => {
+          this.resetNavigation();
+          this.latestRefreshSignal++;
         },
         onExpand: (): void => { this.resetNavigation(); } })
         .visibility(this.mainPageVisible && !this.showBrowser && !this.keyboardVisible ? Visibility.Visible : Visibility.Hidden)

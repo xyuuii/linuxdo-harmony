@@ -1,4 +1,4 @@
-# 帖子阅读交互（0.2.7）
+# 帖子阅读交互（0.2.8）
 
 0.2.1参考实际手机上的酷安鸿蒙版7.1.1（com.coolapk.hmclient）：通过HDC观察用户Pura X View / HarmonyOS 7 / API 26的真实界面，采用顶部作者信息、自然铺开的正文与底部左侧评论入口、右侧常用动作组。酷安向下长滑时隐藏整条导航、反向滚动复原；本项目结合用户要求保留单按钮收起形态。参考截图只留在本机被忽略的artifacts目录，未复制酷安源码、图标或媒体资源。
 
@@ -30,11 +30,11 @@ Root与Navigation负责全窗口区域扩展，子List/Refresh不重复叠加ign
 
 ## 主页面导航
 
-首页、分类、搜索和我的使用常驻AdaptiveNavigationBar。向下浏览时，同一个材质表面收拢为右下当前页图标按钮；反向浏览或点击按钮展开为完整页签。表面使用ReaderGlassSurface兼容玻璃，四个图标节点使用稳定key，收拢与展开共享一个弹簧progress：表面宽高与位置、图标位移和文字透明度连续变化。开启减少动态效果或高对比时主导航保持静态展开。
+首页、分类、搜索和我的使用常驻AdaptiveNavigationBar。向下浏览时，同一个材质表面收拢为当前页图标按钮，默认靠右，并可根据明确的系统握姿侧别调整；反向浏览或点击按钮展开为完整页签。表面使用ReaderGlassSurface兼容玻璃，四个图标节点使用稳定key，收拢与展开共享一个弹簧progress：表面宽高与位置、图标位移和文字透明度连续变化。开启减少动态效果或高对比时主导航保持静态展开。
 
 HdsTabs仅负责主页面内容切换，barHeight设为0。四页保留独立Scroller和原始阅读偏移，只有当前可见主页面的用户滚动参与方向累计；网页认证、子路由或程序滚动不收起主导航。最新/分类的原始初始偏移为负topInset，搜索/我的初始偏移为0；方向判断按实际contentStartOffset归一化，避免把已经向下阅读的负偏移误判成起点。AdaptiveNavigationBar从完整胶囊到单按钮都使用同一个Stack，图标节点持续存在。离开主页面时隐藏主导航，返回时展开并清理方向累计；键盘显示时也隐藏主导航。
 
-当前115项离线回归已通过，其中主导航控制5项、变形几何4项、系统区避让4项、窗口启动3项、回顶持久控件3项；离线回归不替代原生视口、手势、输入法及光感验收。版本设备结果见[验收记录](acceptance.md)。Pura X View上的本客户端安装与底栏兼容视觉观察见0.2.7验收记录；不据此新增原生光学或功耗结论。
+离线回归覆盖主导航控制、变形几何、系统区避让、窗口启动、回顶持久控件以及新增刷新、喜欢和握姿政策；它不替代原生视口、手势、输入法及光感验收。版本执行结果见[验收记录](acceptance.md)。Pura X View上的本客户端安装与底栏兼容视觉观察见0.2.7验收记录；不据此新增原生光学或功耗结论。
 
 ## 图片
 
@@ -94,3 +94,16 @@ Pura X View上的对照日志显示isImmersiveMaterialSupported为true、材质�
 浮动导航/阅读工具的ReaderGlassSurface现在统一保留兼容表面：背景模糊Row与独立主题染色Row组成一个静态玻璃背板，静态边缘与外阴影不随光源移动。染色采用backgroundColor普通绘制，不依赖backgroundEffect的输出；容器高度由圆角半径的两倍明确给出，保持52/56/60vp原几何。根容器不调用原生systemMaterial，避免可见背景被清除而滤镜没有输出；通用控件的MaterialPolicy没有改动。
 
 标准/丰富触点光效继续由TouchLightState驱动，关闭、高对比和轻柔不启用流光。手机与模拟器使用同一路径，不再按产品型号或能力查询区分可见背板。该兼容视觉不宣称原生折射、硬件光学或功耗等价；后续原生路径需以实机实际绘制验证为前提。
+
+
+## 0.2.8 首页、阅读与握姿
+
+双击已选中的“最新”将信号交给同一个TopicFeed和Scroller，立即回到原生List顶部边缘，再刷新第0页；contentStartOffset保留真实安全区起点。普通单击页签仍立即切换，忙时多次刷新意图合并，原生Refresh回调不重复取消并重开请求，隐藏期间等待当前页激活。依据[页签点击响应FAQ](https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-performance-20)避免在整个页签切换上加入双击优先互斥识别导致300ms延迟。
+
+置顶话题集中在一个紧凑块：默认显示前三条完整标题，超过三条提供展开全部与收起。保留服务端顺序，每条可进入原帖，普通列表不再重复渲染；这是展示分组，不改变服务器置顶或已读状态。帖子固定标题的文字及空白区域绑定双击回顶，返回按钮独立保留单击返回，正文选择与图片缩放手势不受影响。
+
+对照登录网站的真实简评，简评采用24vp头像与安全富文本组成32vp最小高度的胶囊，多条自然换行，保留行内emoji、链接及服务器删除权限；昵称进入无障碍说明，移除逐条名字列与常驻删除文字。喜欢或取消回应等待服务器返回后更新当前楼层并显示结果提示，失败即时反馈；“我的 → 我点赞过”读取送出的喜欢，通知“收到的赞”只表示收到的互动，二者使用不同服务端口径。
+
+导航与阅读浮层继续共用ReaderGlassSurface的兼容模糊、主题染色、独立跟手高光。对照[官方沉浸光感最佳实践](https://developer.huawei.com/consumer/cn/doc/best-practices/bpta-spatiality-immersive)与[IT之家鸿蒙版9.0官方介绍](https://www.ithome.com/1/003/407.htm)的悬浮底栏、评论弹窗和底部工具栏跟手展示，保持内容可见与前景可读。兼容绘制不冒充已完整实测的原生折射或系统硬件光效。
+
+握姿依据[智感握姿最佳实践](https://developer.huawei.com/consumer/cn/doc/best-practices/bpta-smart-reach)和[获取用户动作指导](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/motion-guidelines)，仅监听系统holdingHandChanged：明确LEFT_HAND_HELD靠左，RIGHT_HAND_HELD靠右；NOT_HELD、BOTH_HANDS_HELD和UNKNOWN_STATUS保留上次明确位置，初始或不支持时默认右边。DETECT_GESTURE为普通级system_grant权限，不申请ACTIVITY_MOTION或弹授权。EntryAbility前台订阅，后台与销毁用原回调取消，过期回调不更新布局；801表示设备不支持并正常降级，模拟器无法测握姿硬件。侧别政策测试与机型实际感知能力分开记录，0.2.8各项设备结果以验收记录为准。

@@ -133,6 +133,135 @@ function json(payload, status = 200, headers = {}) {
   return { status, body: JSON.stringify(payload), headers };
 }
 
+test('reaction toggles preserve official receipts, CSRF, undo state and exactly one PUT per action', async () => {
+  const rt = runtime();
+  let reacted = false;
+  const { api, requests } = browserApi(rt, async request => {
+    if (request.path === '/session/csrf.json') { return json({ csrf: 'fixture-only-csrf' }); }
+    assert.equal(request.path, '/discourse-reactions/posts/71/custom-reactions/heart/toggle.json');
+    reacted = !reacted;
+    return json({ id: 71, topic_id: 42, post_number: 3, cooked: '<p>fixture post</p>',
+      reactions: reacted ? [{ id: 'heart', type: 'emoji', count: 2 }] : [{ id: 'heart', count: 1 }],
+      current_user_reaction: reacted ? { id: 'heart', type: 'emoji', can_undo: true } : null });
+  });
+  const selected = await api.toggleReaction(71, 'heart');
+  assert.equal(selected.currentUserReaction.id, 'heart');
+  assert.equal(selected.currentUserReaction.canUndo, true);
+  assert.equal(selected.reactions[0].count, 2);
+  const removed = await api.toggleReaction(71, 'heart');
+  assert.equal(removed.currentUserReaction, undefined);
+  assert.equal(removed.reactions[0].count, 1);
+  const writes = requests.filter(request => request.method === 'PUT');
+  assert.equal(writes.length, 2);
+  assert.ok(writes.every(request => request.csrf === 'fixture-only-csrf' && request.body === ''));
+  assert.equal(rt.nativeCalls.length, 0);
+});
+
+test('failed or unconfirmed reaction writes do not retry a toggle or return a fabricated selected state', async () => {
+  for (const [response, kind] of [
+    [json({ errors: ['fixture rejected'] }, 403), 'forbidden'],
+    [json({ errors: ['fixture quota'] }, 429), 'rate_limited'],
+    [json({ errors: ['fixture upstream error'] }, 502), 'unknown_result'],
+    [json({ id: 72, reactions: [] }), 'unknown_result'],
+    [json({ id: 71, reactions: [], current_user_reaction: null }), 'unknown_result'],
+    [json({ id: 71, topic_id: 42, post_number: 3, cooked: '<p>fixture</p>', reactions: [] }), 'unknown_result'],
+    [json({ success: 'OK' }), 'unknown_result'],
+    [{ status: 200, body: 'not a post receipt', headers: {} }, 'unknown_result']
+  ]) {
+    const rt = runtime();
+    const { api, requests } = browserApi(rt, async request => request.method === 'GET' ?
+      json({ csrf: 'fixture-only-csrf' }) : response);
+    await assert.rejects(() => api.toggleReaction(71, 'heart'), error => error.kind === kind);
+    assert.equal(requests.filter(request => request.method === 'PUT').length, 1, 'A toggle cannot be retried automatically.');
+  }
+});
+
+test('reaction cancellation during CSRF fetch cannot issue a write under a changed account', async () => {
+  const rt = runtime();
+  let release;
+  const { api, requests } = browserApi(rt, () => new Promise(resolve => { release = resolve; }));
+  const pending = api.toggleReaction(71, 'heart').then(value => ({ value }), error => ({ error }));
+  await Promise.resolve();
+  api.resetSessionContext();
+  release(json({ csrf: 'old-account-fixture-only' }));
+  assert.equal((await pending).error.kind, rt.api.ForumErrorKind.Cancelled);
+  assert.equal(requests.filter(request => request.method === 'PUT').length, 0);
+});
+
+test('my liked posts use Discourse LIKE=1 activity and keep pagination separate from received-like notifications', async () => {
+  const rt = runtime();
+  const actions = Array.from({ length: 30 }, (_unused, index) => ({
+    post_id: 100 + index, topic_id: 42, post_number: index + 1,
+    title: 'Fixture &amp; title', excerpt: '<p>Liked excerpt</p>', action_type: 1, created_at: '2026-10-11T11:00:00Z'
+  }));
+  const { api, requests } = browserApi(rt, async request => request.path.startsWith('/user_actions.json') ?
+    json({ user_actions: actions }) : json({ notifications: [] }));
+  const page = await api.fetchProfile('fixture user', rt.models.ProfileSection.Likes, 2);
+  const query = new URL('https://linux.do' + requests[0].path).searchParams;
+  assert.equal(query.get('username'), 'fixture user');
+  assert.equal(query.get('filter'), '1');
+  assert.equal(query.get('offset'), '60');
+  assert.equal(query.get('limit'), '30');
+  assert.equal(page.nextCursor, 3);
+  assert.equal(page.hasMore, true);
+  assert.equal(page.entries[0].title, 'Fixture & title');
+  assert.equal(page.entries[0].topicId, 42);
+  assert.equal(page.entries[0].postNumber, 1);
+  assert.match(page.entries[0].subtitle, /点赞.*Liked excerpt/);
+  const refreshed = await api.fetchProfile('fixture user', rt.models.ProfileSection.Likes, 0);
+  assert.equal(refreshed.entries[0].id, page.entries[0].id, 'Duplicate likes retain a stable key across refreshed offsets.');
+  await api.fetchNotifications(0, rt.models.NotificationFilter.Likes);
+  assert.ok(requests[2].path.startsWith('/notifications.json?'));
+  assert.equal(requests[2].path.includes('user_actions'), false);
+  assert.equal(rt.models.notificationFilters.find(item => item.value === rt.models.NotificationFilter.Likes).label, '收到的赞');
+});
+
+test('a missing liked-activity receipt is an error rather than a false empty history', async () => {
+  const rt = runtime();
+  const { api } = browserApi(rt, async () => json({ success: true }));
+  await assert.rejects(() => api.fetchProfile('fixture-user', rt.models.ProfileSection.Likes),
+    error => error.kind === rt.api.ForumErrorKind.InvalidResponse);
+});
+
+test('native bodyless PUT and DELETE omit SDK-rejected empty extraData while nonempty JSON POST preserves its payload', async () => {
+  const receipt = { id: 71, topic_id: 42, post_number: 3, cooked: '<p>fixture post</p>',
+    reactions: [{ id: 'heart', count: 1 }], current_user_reaction: { id: 'heart', can_undo: true } };
+  const rt = runtime((_url, options) => {
+    // Official NetStack GetRequestBody rejects string.empty() before any I/O.
+    if (options.extraData === '') { return Promise.reject({ code: 401 }); }
+    return { responseCode: 200, header: {}, cookies: '', result: JSON.stringify(receipt) };
+  });
+  const api = new rt.api.ForumApi();
+  api.waitForSlot = async () => {}; api.fetchCsrf = async () => 'fixture-only-csrf';
+  await api.toggleReaction(71, 'heart');
+  await api.deletePost(71);
+  await api.createPost(42, 'fixture reply');
+  assert.deepEqual(rt.nativeCalls.map(call => call.options.method), ['PUT', 'DELETE', 'POST']);
+  for (const call of rt.nativeCalls.slice(0, 2)) {
+    assert.equal(Object.hasOwn(call.options, 'extraData'), false, 'Bodyless writes must not reach the SDK with an empty string.');
+    assert.equal(call.options.header['X-CSRF-Token'], 'fixture-only-csrf');
+    assert.equal(call.options.maxRedirects, 0);
+  }
+  assert.deepEqual(JSON.parse(rt.nativeCalls[2].options.extraData), { raw: 'fixture reply', topic_id: 42 });
+  assert.equal(rt.nativeCalls[2].options.header['X-CSRF-Token'], 'fixture-only-csrf');
+  assert.equal(rt.destroyCount, 3);
+});
+
+test('SDK parameter error 401 is a local unsubmitted rejection, HTTP 401 remains authentication, and neither retries a toggle', async () => {
+  const sdk = runtime(() => Promise.reject({ code: 401 }));
+  const api = new sdk.api.ForumApi();
+  api.waitForSlot = async () => {}; api.fetchCsrf = async () => 'fixture-only-csrf';
+  await assert.rejects(() => api.toggleReaction(71, 'heart'), error =>
+    error.kind === sdk.api.ForumErrorKind.Rejected && error.status === 0 && error.message.includes('未提交'));
+  assert.equal(sdk.nativeCalls.length, 1);
+  const http = runtime({ responseCode: 401, header: {}, cookies: '', result: '{"errors":["fixture unauthenticated"]}' });
+  const second = new http.api.ForumApi();
+  second.waitForSlot = async () => {}; second.fetchCsrf = async () => 'fixture-only-csrf';
+  await assert.rejects(() => second.toggleReaction(71, 'heart'), error =>
+    error.kind === http.api.ForumErrorKind.AuthenticationRequired && error.status === 401);
+  assert.equal(http.nativeCalls.length, 1);
+});
+
 test('Linux.do object tags and standard Discourse string tags coexist', () => {
   const { wire } = runtime();
   const topic = wire.topicFromWire({

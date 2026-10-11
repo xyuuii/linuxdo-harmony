@@ -45,7 +45,8 @@ function startupRuntime(getWindow) {
     },
     '@kit.PerformanceAnalysisKit': { hilog },
     '@kit.ArkUI': { window: {} },
-    '@kit.BasicServicesKit': {}
+    '@kit.BasicServicesKit': {},
+    '../services/HandednessState': { handednessState: { start() {}, stop() {} } }
   };
   const module = { exports: {} };
   const nativeRequire = name => {

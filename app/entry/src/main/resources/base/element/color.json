@@ -1,8 +1,9 @@
 {
   "color": [
+    { "name": "boost_background", "value": "#F2F2F2" },
     { "name": "touch_light_core", "value": "#F0FFFFFF" },
-    { "name": "touch_light_halo", "value": "#80DDEEFF" },
-    { "name": "touch_light_fade", "value": "#00DDEEFF" },
+    { "name": "touch_light_halo", "value": "#B3C7E3FF" },
+    { "name": "touch_light_fade", "value": "#00C7E3FF" },
     {
       "name": "start_window_background",
       "value": "#F4F5F8"
@@ -49,7 +50,7 @@
     },
     {
       "name": "reading_glass_tint",
-      "value": "#B3FFFFFF"
+      "value": "#70FFFFFF"
     },
     {
       "name": "reading_glass_rim",

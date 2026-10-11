@@ -205,13 +205,18 @@ export class ForumApi {
             usingCache: false, connectTimeout: 6000, readTimeout: 20000,
             maxRedirects: 0, maxLimit: 6 * 1024 * 1024
           };
-          if (spec.body !== undefined) { options.extraData = spec.body; }
+          // NetStack rejects extraData='' before sending. Omit it for bodyless mutations.
+          if (spec.body !== undefined && spec.body.length > 0) { options.extraData = spec.body; }
           if (spec.multipart !== undefined) { options.multiFormDataList = spec.multipart; }
           request.request(url, options).then((value: http.HttpResponse): void => {
             if (!settled) { settled = true; resolve(value); }
           }).catch((error: BusinessError): void => {
             if (settled) { return; }
             settled = true;
+            if (error.code === 401) {
+              reject(new ForumApiError(ForumErrorKind.Rejected, 0, '请求配置无效，未提交，请更新应用'));
+              return;
+            }
             const writing: boolean = spec.method !== http.RequestMethod.GET;
             const kind: ForumErrorKind = writing ? ForumErrorKind.UnknownResult :
               (error.code === 2300047 ? ForumErrorKind.VerificationRequired :
@@ -533,8 +538,21 @@ export class ForumApi {
   async toggleReaction(postId: number, reaction: string, cancellation?: RequestCancellation): Promise<Post> {
     validateId(postId);
     if (!/^[a-zA-Z0-9_+:\-]+$/.test(reaction)) { throw new ForumApiError(ForumErrorKind.Rejected, 0, '无效的表情回应'); }
-    return postFromWire(this.parse<PostWire>(await this.mutate(
-      `/discourse-reactions/posts/${postId}/custom-reactions/${encodeURIComponent(reaction)}/toggle.json`, http.RequestMethod.PUT, '', cancellation)));
+    const raw: string = await this.mutate(
+      `/discourse-reactions/posts/${postId}/custom-reactions/${encodeURIComponent(reaction)}/toggle.json`, http.RequestMethod.PUT, '', cancellation);
+    try {
+      const wire: PostWire = this.parse<PostWire>(raw);
+      if (wire.id !== postId || numberValue(wire.topic_id) <= 0 || numberValue(wire.post_number) <= 0 ||
+        typeof wire.cooked !== 'string' || !Array.isArray(wire.reactions) || wire.current_user_reaction === undefined) {
+        throw new Error('Incomplete reaction result');
+      }
+      const post: Post = postFromWire(wire);
+      return post;
+    } catch {
+      // A successful HTTP write with a malformed receipt is not safe to repeat:
+      // this endpoint toggles, so repeating it could undo the original action.
+      throw new ForumApiError(ForumErrorKind.UnknownResult, 0, '回应结果未确认，请刷新帖子后查看，避免重复提交');
+    }
   }
   async createBoost(postId: number, raw: string, cancellation?: RequestCancellation): Promise<Boost> {
     validateId(postId);
@@ -682,12 +700,19 @@ export class ForumApi {
       });
       return { fields: [], entries: entries, hasMore: page.hasMore, nextCursor: cursor + 1 };
     }
-    const response: ActionsResponseWire = this.parse<ActionsResponseWire>(await this.get(`/user_actions.json?username=${path}&offset=${cursor * 30}&limit=30`, cancellation));
+    // Discourse UserAction LIKE=1 means likes given; notifications are likes received.
+    const actionFilter: string = section === ProfileSection.Likes ? '&filter=1' : '';
+    const response: ActionsResponseWire = this.parse<ActionsResponseWire>(await this.get(`/user_actions.json?username=${path}&offset=${cursor * 30}&limit=30${actionFilter}`, cancellation));
+    if (!Array.isArray(response.user_actions)) {
+      throw new ForumApiError(ForumErrorKind.InvalidResponse, 0,
+        section === ProfileSection.Likes ? '社区未返回点赞记录，请刷新后重试' : '社区未返回个人活动，请刷新后重试');
+    }
     const actions: ActionWire[] = list(response.user_actions);
     const entries: ProfileEntry[] = actions.map((action: ActionWire, index: number): ProfileEntry => {
       const labels: Record<string, string> = { '1': '点赞', '2': '收到赞', '4': '发表话题', '5': '回复', '6': '收到回复', '7': '被提及', '9': '引用', '11': '消息', '12': '消息' };
       const label: string = labels[String(numberValue(action.action_type))] ?? '活动';
-      return { id: `${cursor * 30 + index}:${numberValue(action.post_id)}`, title: plainText(text(action.title)) || '社区活动',
+      return { id: section === ProfileSection.Likes ? `like:${numberValue(action.post_id)}:${text(action.created_at)}` :
+          `${cursor * 30 + index}:${numberValue(action.post_id)}`, title: plainText(text(action.title)) || '社区活动',
         subtitle: [label, plainText(text(action.excerpt)), text(action.created_at).slice(0, 10)].filter((value: string): boolean => value.length > 0).join(' · '),
         topicId: numberValue(action.topic_id), unread: false, notificationType: 0, avatarUrl: '', actor: '', postNumber: numberValue(action.post_number) };
     });

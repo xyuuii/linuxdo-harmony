@@ -68,8 +68,11 @@ function readerRuntime() {
   const reads = [];
   const bars = [];
   const animations = [];
+  const messages = [];
   const session = { user: { id: 7 }, revision: 1 };
   const prohibited = () => { throw new Error('Native I/O is prohibited in reader method tests.'); };
+  const api = { fetchTopic: prohibited, fetchPosts: prohibited, getUserAgent: prohibited, toggleReaction: prohibited };
+  class ForumApiError extends Error { constructor(kind, message) { super(message); this.kind = kind; } }
   const exports = load(declarations + '\n' + pageClass, {
     forumSession: session,
     loadAppearanceSettings: () => ({}),
@@ -79,7 +82,8 @@ function readerRuntime() {
     ScrollSource,
     ScrollState,
     curves: { springMotion: (...args) => ({ spring: args }) },
-    forumApi: { fetchTopic: prohibited, fetchPosts: prohibited, getUserAgent: prohibited },
+    forumApi: api, ForumApiError, ForumErrorKind: { Cancelled: 'cancelled' },
+    RequestCancellation: class { isCancelled = false; cancel() { this.isCancelled = true; } },
     http: { createHttp: prohibited }, fileIo: { open: prohibited },
     picker: { DocumentViewPicker: prohibited },
     photoAccessHelper: { getPhotoAccessHelper: prohibited },
@@ -110,19 +114,82 @@ function readerRuntime() {
   });
   const page = new exports.TopicPage();
   page.getUIContext = () => ({
+    getPromptAction: () => ({ showToast: options => messages.push(options.message) }),
     getHostContext: () => ({
       resourceManager: { getColorSync: id => id.endsWith('page_background') ? 0xfff4f5f8 : 0xff11151d }
     }),
     animateTo(options, callback) { animations.push(options); callback(); options.onFinish?.(); }
   });
+  const productionReload = page.reload.bind(page);
   page.reload = number => { reads.push(number); };
   const layout = () => { while (timers.length > 0) { timers.shift().callback(); } };
-  return { page, session, timers, cancelledTimers, reads, bars, animations, layout };
+  return { page, session, timers, cancelledTimers, reads, bars, animations, layout, api, productionReload, messages };
 }
 
 function imagePost(id, cooked) {
   return { id, postNumber: id, topicId: 100, cooked, replyToPostNumber: 0, replyCount: 0 };
 }
+
+test('returning before a like completes queues exactly one visible server confirmation and never repeats the toggle', async () => {
+  const rt = readerRuntime();
+  const { page, api } = rt;
+  const previous = { ...imagePost(7, '<p>fixture</p>'), currentUserReaction: undefined, reactions: [], yours: false };
+  const selected = { ...previous, currentUserReaction: { id: 'heart', canUndo: true }, reactions: [{ id: 'heart', count: 1 }] };
+  const confirmations = [];
+  let release;
+  let toggles = 0;
+  api.toggleReaction = () => { toggles++; return new Promise(resolve => { release = resolve; }); };
+  api.fetchTopic = async (id, number) => {
+    confirmations.push({ id, number });
+    return { id, title: 'Fixture topic', postStream: { posts: [selected], stream: [7] }, validReactions: ['heart'] };
+  };
+  page.reload = rt.productionReload;
+  page.topicId = 100; page.topicOwnerId = 7; page.entered = true;
+  page.currentNumber = 7; page.lastInputNumber = 1; page.posts = [previous];
+  const pending = page.react(previous, 'heart');
+  page.hideFromNavigation();
+  page.showFromNavigation(); page.showFromNavigation();
+  assert.equal(page.pendingVisibleReload, 7);
+  assert.equal(confirmations.length, 0, 'The visible confirmation waits until the write receipt completes.');
+  release(selected);
+  await pending;
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(confirmations, [{ id: 100, number: 7 }]);
+  assert.equal(toggles, 1, 'Re-entry must never replay a state-toggling PUT.');
+  assert.equal(page.pendingVisibleReload, 0);
+  assert.equal(page.posts[0].currentUserReaction.id, 'heart');
+  assert.deepEqual(rt.messages, [], 'A stale mutation cannot emit feedback in the new visible generation.');
+});
+
+test('a completed like while still hidden never confirms in the background; the next shown page reads once', async () => {
+  const rt = readerRuntime();
+  const { page, api } = rt;
+  const previous = { ...imagePost(7, '<p>fixture</p>'), currentUserReaction: undefined, reactions: [], yours: false };
+  const selected = { ...previous, currentUserReaction: { id: 'heart', canUndo: true }, reactions: [{ id: 'heart', count: 1 }] };
+  const confirmations = [];
+  let release;
+  let toggles = 0;
+  api.toggleReaction = () => { toggles++; return new Promise(resolve => { release = resolve; }); };
+  api.fetchTopic = async (id, number) => {
+    confirmations.push({ id, number });
+    return { id, title: 'Fixture topic', postStream: { posts: [selected], stream: [7] }, validReactions: ['heart'] };
+  };
+  page.reload = rt.productionReload;
+  page.topicId = 100; page.topicOwnerId = 7; page.entered = true;
+  page.currentNumber = 7; page.lastInputNumber = 1; page.posts = [previous];
+  const pending = page.react(previous, 'heart');
+  page.hideFromNavigation(); page.showFromNavigation(); page.hideFromNavigation();
+  release(selected);
+  await pending;
+  assert.equal(page.pendingVisibleReload, 0);
+  assert.equal(confirmations.length, 0);
+  assert.equal(page.posts[0].currentUserReaction, undefined);
+  assert.deepEqual(rt.messages, []);
+  page.showFromNavigation();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(confirmations, [{ id: 100, number: 7 }]);
+  assert.equal(toggles, 1);
+});
 
 test('same-floor edit refreshes data once, ordinary floor navigation only jumps and shown consumes pending refresh', () => {
   const { page, reads } = readerRuntime();

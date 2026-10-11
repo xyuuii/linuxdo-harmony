@@ -71,3 +71,16 @@ test('malformed event and viewport values cannot produce invalid geometry or opa
     assert.ok(frame.labelOpacity >= 0 && frame.labelOpacity <= 1);
   }
 });
+
+test('left handed collapse keeps all icon hit areas inside the same left anchored surface', () => {
+  for (let index = 0; index < 4; index++) {
+    for (const progress of [0, 0.25, 0.5, 0.75, 1]) {
+      const frame = navigationMorphFrame(360, index, progress, true);
+      assert.equal(frame.surfaceLeft, 0);
+      near(frame.buttonLeft + frame.buttonWidth / 2,
+        (index + 0.5) * 90 * (1 - progress) + 26 * progress);
+      assert.ok(frame.buttonLeft >= 0);
+      assert.ok(frame.buttonLeft + frame.buttonWidth <= frame.surfaceWidth + 1e-8);
+    }
+  }
+});

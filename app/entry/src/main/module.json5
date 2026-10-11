@@ -9,7 +9,10 @@
     ],
     "deliveryWithInstall": true,
     "installationFree": false,
-    "requestPermissions": [{ "name": "ohos.permission.INTERNET" }],
+    "requestPermissions": [
+      { "name": "ohos.permission.INTERNET" },
+      { "name": "ohos.permission.DETECT_GESTURE", "usedScene": { "abilities": ["EntryAbility"], "when": "inuse" } }
+    ],
     "metadata": [{ "name": "ohos.arkui.UIMaterial.state", "value": "default" }],
     "pages": "$profile:main_pages",
     "abilities": [

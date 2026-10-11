@@ -31,6 +31,7 @@ export struct ProfileSectionPage {
   private title(): string {
     if (this.section === ProfileSection.Summary) { return '我的总结'; }
     if (this.section === ProfileSection.Activity) { return '活动'; }
+    if (this.section === ProfileSection.Likes) { return '我点赞过'; }
     if (this.section === ProfileSection.Messages) { return '私信'; }
     return '账号与邮箱';
   }
@@ -43,7 +44,8 @@ export struct ProfileSectionPage {
     const request: RequestCancellation = new RequestCancellation();
     this.request = request; this.busy = true; this.error = ''; this.needsLogin = false;
     try {
-      const result: ProfileContent = await forumApi.fetchProfile(username, this.section, reset ? 0 : this.cursor);
+      const result: ProfileContent = await forumApi.fetchProfile(username, this.section, reset ? 0 : this.cursor,
+        undefined, undefined, request);
       if (this.request !== request || forumSession.user?.username !== username) { return; }
       this.fields = result.fields;
       const merged: ProfileEntry[] = reset ? result.entries : this.entries.concat(result.entries);
@@ -98,7 +100,8 @@ export struct ProfileSectionPage {
             Button('加载更多').height(48).width('100%').fontColor($r('app.color.accent'))
               .backgroundColor($r('app.color.surface')).onClick(() => { void this.load(false); })
           } else if (this.entries.length === 0 && this.fields.length === 0) {
-            Text('暂时没有内容').fontColor($r('app.color.text_secondary')).padding(24)
+            Text(this.section === ProfileSection.Likes ? '还没有送出喜欢，给喜欢的帖子点个赞吧。' : '暂时没有内容')
+              .fontColor($r('app.color.text_secondary')).padding(24)
           }
         }
       }.width('100%').height('100%').padding(20).scrollBar(BarState.Off)

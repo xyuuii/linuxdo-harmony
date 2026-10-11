@@ -18,10 +18,13 @@ import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.Ab
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { handednessState } from '../services/HandednessState';
 
 const DOMAIN = 0x0000;
 
 export default class EntryAbility extends UIAbility {
+  private foreground: boolean = false;
+
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
@@ -32,12 +35,15 @@ export default class EntryAbility extends UIAbility {
   }
 
   onDestroy(): void {
+    this.foreground = false;
+    handednessState.stop();
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onDestroy');
   }
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
     // Main window is created, set main page for this ability
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageCreate');
+    if (this.foreground) { handednessState.start(); }
 
     void this.configureMainWindowAndLoad(windowStage);
   }
@@ -65,14 +71,19 @@ export default class EntryAbility extends UIAbility {
   onWindowStageDestroy(): void {
     // Main window is destroyed, release UI related resources
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageDestroy');
+    handednessState.stop();
   }
 
   onForeground(): void {
+    this.foreground = true;
+    handednessState.start();
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
   }
 
   onBackground(): void {
+    this.foreground = false;
+    handednessState.stop();
     // Ability has back to background
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
   }

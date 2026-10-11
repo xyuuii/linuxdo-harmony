@@ -9,9 +9,9 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 基于 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的真实功能与 Discourse 接口，以 ArkTS / ArkUI V2 重构的鸿蒙原生客户端。固定参考提交 `e31fe8e3a06a5de2e9c013925dd1c40a7743d30e`，源代码版本 1.1.1。
 
-本地应用版本 `0.2.7`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
+本地应用版本 `0.2.8`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
 
-调试包：[0.2.7 GitHub Release](https://github.com/xyuuii/linuxdo-harmony/releases/tag/v0.2.7) · [下载 HAP](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.7/LinuxDo-HarmonyOS7-0.2.7-debug.hap) · [SHA256 校验文件](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.7/SHA256SUMS)。这是开发调试签名包，安装受签名设备授权限制；其他设备请按下方构建说明使用自己的开发者签名。二进制保存在 Release 附件中。
+调试包：[0.2.8 GitHub Release](https://github.com/xyuuii/linuxdo-harmony/releases/tag/v0.2.8) · [下载 HAP](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.8/LinuxDo-HarmonyOS7-0.2.8-debug.hap) · [SHA256 校验文件](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.8/SHA256SUMS)。这是开发调试签名包，安装受签名设备授权限制；其他设备请按下方构建说明使用自己的开发者签名。二进制保存在 Release 附件中。
 
 0.1.1 收紧首页、分类和搜索的信息密度：话题标题最多两行，缩小卡片留白；分类等级与名称同排。分类详情移除了重复标题和不适用的底部页签预留，列表用满可用高度。首页和搜索仅在滚动末端为浮动页签留空间。
 
@@ -31,7 +31,9 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 0.2.7 修复真机底栏全透明：主导航和阅读操作统一使用可见的兼容玻璃层，将基础染色与背景模糊分开，触点流光独立跟随。Pura X View实测原生材质查询与构造成功仍无滤镜输出，因此浮动底栏不再依赖这一能力标志。系统设置未被修改，效果关闭及高对比仍使用实色。
 
-首页、分类、搜索和我的使用 AdaptiveNavigationBar 主导航：向下浏览时，同一个材质胶囊连续收拢为右下当前页图标按钮；反向滚动或点击按钮连续展开为四个页签。表面与图标节点保持，文字随收拢渐隐，列表阅读位置保持。开启减少动态效果或高对比时，主导航保持展开。
+0.2.8 新增首页双击已选“最新”回顶并刷新，普通单击切换页签仍立即响应；置顶话题集中为紧凑标题块，默认三条，可展开全部。帖子标题区域支持双击回顶，网站简评改为头像与内容胶囊；修复鸿蒙网络库拒绝空正文请求导致的点赞失败，喜欢操作提供服务器结果反馈，“我的 → 我点赞过”展示送出的喜欢，通知的“收到的赞”单独保留接收口径。底栏继续共用兼容玻璃与触点流光，调整通透层次；收起按钮可根据系统真实握持手状态靠向左侧或右侧，未知、双手或不支持时保留默认/上次明确侧别。
+
+首页、分类、搜索和我的使用 AdaptiveNavigationBar 主导航：向下浏览时，同一个材质胶囊连续收拢为当前页图标按钮，默认靠右并可随明确握姿侧别调整；反向滚动或点击按钮连续展开为四个页签。表面与图标节点保持，文字随收拢渐隐，列表阅读位置保持。开启减少动态效果或高对比时，主导航保持展开。
 
 ## 应用图标
 
@@ -51,15 +53,15 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 | 页面 / 流程 | 实现 |
 | --- | --- |
-| 最新 | 真实话题、作者、分类、回复数及浏览量；分页、下拉刷新、前台可选自动刷新 |
+| 最新 | 真实话题、作者、分类、回复数及浏览量；分页、下拉刷新、双击已选最新回顶刷新、紧凑可展开置顶、前台可选自动刷新 |
 | 分类 | 真实分类树、同名 Lv 子分类分组、按分类分页浏览 |
 | 搜索 | 关键词、六种排序、结果摘要与分页 |
-| 我的 | 总结、活动、通知、现有私信、账号与邮箱资料、退出 |
-| 话题 | 原生安全富文本、前后 20 楼切片、首楼/尾部/指定楼定位、楼中楼三条预览及展开收起 |
-| 互动 | 按服务器权限回复、编辑、删除、表情回应、简评、解决方案标记 |
+| 我的 | 总结、活动、我点赞过、通知、现有私信、账号与邮箱资料、退出 |
+| 话题 | 原生安全富文本、前后 20 楼切片、首楼/尾部/指定楼定位、标题区域双击回顶、楼中楼三条预览及展开收起 |
+| 互动 | 按服务器权限回复、编辑、删除、喜欢及其他回应与结果反馈、网站样式简评胶囊、解决方案标记 |
 | 编辑器 | 账号隔离的本机草稿、图库/文档选择器、4 MiB 附件校验、用户发表时才上传 |
 | 图片 / 附件 | 同 UA / 会话的沙箱图片加载、原图查看、SaveButton 临时授权保存、系统文档保存 |
-| 通知 | 全部 / 回复 / 点赞 / 私信；真实服务端 offset，点击已读，定位具体楼层；前台轮询与错误退避 |
+| 通知 | 全部 / 回复 / 收到的赞 / 私信；真实服务端 offset，点击已读，定位具体楼层；前台轮询与错误退避 |
 | 登录 | 账号密码、邮件登录链接 token、TOTP / 恢复码、可见网页验证与第三方认证 |
 | 外观 | 跟随系统 / 浅色 / 深色，四档沉浸光感，减少动态、高对比、树形阅读与设置持久化 |
 
@@ -70,6 +72,8 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 使用 `HdsNavigation` 组织页面、`HdsTabs` 切换主页面内容。帖子在 `NavDestination` 内绘制固定的作者/话题双行标题：高度为动态顶部避让加56vp，启用单层系统背景模糊，关闭效果或高对比时使用实色。底部主导航由 AdaptiveNavigationBar 呈现。内容面板保持清晰，浮动主导航与阅读工具采用兼容背景模糊、主题染色与触点流光；设置控件和确认弹窗仍使用系统沉浸材质。预览中的背景是独立静态 SVG，通用控件原生材质使用 API 26 的 `uiMaterial.ImmersiveMaterial`，不将底栏兼容绘制称为原生光学渲染。
 
 主导航常驻同一个材质 Stack 和四个稳定 key 的图标节点，由一个弹簧 progress 连续驱动表面宽高、位置、图标位移与文字透明度。HdsTabs 的 barHeight 为0，仅保留内容切换；收放由同一表面完成。交互取自实际手机上的酷安鸿蒙版观察，参考截图只保留在本机，未复制其源码、图标或媒体资源。
+
+握姿适配使用官方 `motion.on('holdingHandChanged')`，只依据系统明确的左手/右手结果调整收起按钮侧别，不根据触点、设备倾斜或模拟数据猜测。前台订阅、后台和销毁取消；未握持、双手和未知保持上次明确侧别，没有明确结果时默认右边。机型不支持返回801时保留布局，模拟器无法验证握姿硬件。实现依据[智感握姿最佳实践](https://developer.huawei.com/consumer/cn/doc/best-practices/bpta-smart-reach)及[获取用户动作指导](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/motion-guidelines)。
 
 | 等级 | 通用控件系统材质 | 底栏兼容表面 |
 | --- | --- | --- |
@@ -86,6 +90,8 @@ Root / Navigation 负责扩展系统区，子 List / Refresh 保持继承的全�
 
 [华为设计规范](https://developer.huawei.com/consumer/cn/design/) · [HarmonyOS 7 / API 26 升级指导](https://developer.huawei.com/consumer/en/doc/harmonyos-releases/upgrade-adaptation) · [官方沉浸光感方案](https://developer.huawei.com/consumer/cn/doc/guidebook/solution-0000002784570841)
 
+本轮还对照[沉浸光感最佳实践](https://developer.huawei.com/consumer/cn/doc/best-practices/bpta-spatiality-immersive)、[页签点击响应 FAQ](https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-performance-20)及[IT之家鸿蒙版9.0官方介绍](https://www.ithome.com/1/003/407.htm)中的悬浮底栏与工具栏跟手展示。参考交互和层次，不复制素材，也不把兼容玻璃绘制称为已完整实测的原生光学效果。
+
 ## 登录与数据边界
 
 - API / 原生桥只面向 `https://linux.do`，Cookie 从本应用 ArkWeb 读取，HttpOnly 可同步，密码和两步码不持久化。
@@ -95,7 +101,7 @@ Root / Navigation 负责扩展系统区，子 List / Refresh 保持继承的全�
 - 用户完成验证后才启用同源浏览器传输；不自动解验证码，也不自动重放写请求。
 - 换账号立即取消旧请求、清显示数据和缓存；图片按账号、会话代数及进程隔离。
 - 缺失编辑/删除/回复权限按不允许处理，提交前再次向服务器核实。写请求超时提示结果未确认，避免自动重复提交。
-- 只有 `INTERNET` 静态系统权限，选文件走系统选择器，图片保存通过安全控件临时授权。
+- 静态声明 `INTERNET` 和用于前台握姿感知的 `DETECT_GESTURE`，后者为普通级 `system_grant` 权限，不额外弹出动态授权；选文件走系统选择器，图片保存通过安全控件临时授权。
 
 ## 工程与构建
 
@@ -119,7 +125,7 @@ npm install --prefix .local-test-runtime --no-save --package-lock=false --ignore
 DEVECO_TYPESCRIPT_PATH="$PWD/.local-test-runtime/node_modules/typescript/lib/typescript.js" node --test tests/*.test.mjs
 ```
 
-当前115项本地离线回归已通过。GitHub Actions 使用相同的 TypeScript 4.9.5 和 Node 22 执行同一测试集；测试只读取源码和编译运行时，不访问真实论坛或设备存储。它不编译 ArkUI、不登录论坛，不替代 SDK 编译及设备验收。
+离线回归读取实际生产方法，覆盖首页信号消费、刷新并发、置顶分组、喜欢反馈、简评展示与握姿生命周期等。GitHub Actions 使用 TypeScript 4.9.5 和 Node 22 执行同一测试集；测试只读取源码和编译运行时，不访问真实论坛或设备存储。它不编译 ArkUI、不登录论坛，不替代 SDK 编译及设备验收；各版本实际结果见[验收记录](docs/acceptance.md)。
 
 本机 `app/build-profile.json5` 不进入 Git；仓库提供无凭据的 `build-profile.example.json5`，首次执行 build.sh 会复制模板。需要安装到自己的设备时，以自己的开发者账号生成包含目标设备的调试签名：
 
@@ -138,9 +144,9 @@ macOS 上如遇 CLI 把已有镜像误判未下载，可用 `./scripts/start-emu
 - 本地测试读取实际 .ets：响应映射、权限缺省、分页、通知口径、Unicode 简评、写 payload、401/403/429、取消、账号切换、图片隔离和认证域名。
 - 已看到真实服务器最新话题，未使用模拟帖子填充应用。
 - 0.2.1 的81项离线回归通过；当时的主导航收拢、点击展开与正文滚动已在模拟器观察。帖子末尾继续上拉反馈、尾部分页回首楼等阅读控制有模拟器记录与方法回归。
-- Pura X View / HarmonyOS 7 真机用于观察酷安鸿蒙版7.1.1的实际交互；本客户端的新增界面验收仍在模拟器完成，尚未获得本客户端真机光感或功耗结果。
+- Pura X View / HarmonyOS 7 真机用于观察酷安鸿蒙版7.1.1的实际交互；0.2.7本客户端的兼容底栏也有真机视觉记录。0.2.8逐项结果以验收记录为准，不将兼容视觉观察扩大为原生光学、握姿硬件或功耗验证。
 - GitHub 认证入口已实测跳转成功；用户完成授权后，原生个人页确认会话有效，重启后仍可读取真实帖子。搜索“鸿蒙”已返回真实结果。
-- 本次没有代用户发帖、上传、删除或改变通知已读状态。服务器写操作、第二账号切换及物理设备光感表现尚未端到端验证，详见验收记录。
+- 0.2.8在模拟器实测喜欢与撤销，并以Chrome回读确认恢复未赞；我点赞过可读到新记录。未发帖、上传、删除或改变通知已读状态。第二账号切换、握姿传感器及本轮物理设备光感仍未端到端验证，详见验收记录。
 - `devecocli check lint` 当前返回 Files checked:0，不能作为 lint 有效通过；静态依据是 SDK 编译。
 - SaveButton 调用 createAsset 的静态权限提示与官方临时授权场景对应，不为消除提示增加广域图库权限；相关文件/网络异常有释放和失败处理。
 

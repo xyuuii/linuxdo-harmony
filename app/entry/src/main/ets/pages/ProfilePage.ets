@@ -21,6 +21,7 @@ export struct ProfilePage {
   private menus: ProfileMenuItem[] = [
     { id: ProfileSection.Summary, title: '我的总结', subtitle: '参与、交流与成长', symbol: $r('sys.symbol.list_bullet') },
     { id: ProfileSection.Activity, title: '活动', subtitle: '我的发帖与回复', symbol: $r('sys.symbol.clock') },
+    { id: ProfileSection.Likes, title: '我点赞过', subtitle: '查看送出的喜欢', symbol: $r('sys.symbol.heart') },
     { id: ProfileSection.Notifications, title: '通知', subtitle: '回复、提及与互动', symbol: $r('sys.symbol.bell') },
     { id: ProfileSection.Messages, title: '私信', subtitle: '查看私信话题', symbol: $r('sys.symbol.envelope') },
     { id: ProfileSection.Account, title: '账号与邮箱', subtitle: '查看个人资料', symbol: $r('sys.symbol.person') }

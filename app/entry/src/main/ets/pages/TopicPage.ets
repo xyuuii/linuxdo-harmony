@@ -1,4 +1,5 @@
 import { ReaderGlassSurface } from '../components/ReaderGlassSurface';
+import { BoostBubble } from '../components/BoostBubble';
 import { common } from '@kit.AbilityKit';
 import { window, curves, ButtonModifier, LengthMetrics, ColorMetrics, uiMaterial } from '@kit.ArkUI';
 import { HdsActionBar, ActionBarButton, ActionBarStyle, BlurStrategy } from '@kit.UIDesignKit';
@@ -9,7 +10,7 @@ import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { AppearanceSettings, loadAppearanceSettings } from '../models/AppearanceSettings';
 import { Boost, Post, Reaction, TopicDetail, measureBoost } from '../models/ForumModels';
 import { ForumSession, forumSession } from '../models/ForumSession';
-import { forumApi, RequestCancellation } from '../services/ForumApi';
+import { forumApi, ForumApiError, ForumErrorKind, RequestCancellation } from '../services/ForumApi';
 import { materialFor } from '../services/MaterialPolicy';
 import { RichPostContent, postContentUrl, parsePostContent, PostBlock } from '../components/RichPostContent';
 import { NativeForumImage } from '../components/NativeForumImage';
@@ -206,7 +207,6 @@ struct TopicPostCard {
   @Event onLogin: () => void = (): void => {};
   @Local boosting: boolean = false;
   @Local boostDraft: string = '';
-  @Local expandedBoosts: boolean = false;
 
   @Computed
   get reactionChoices(): string[] { return Array.from(new Set<string>(['heart'].concat(this.reactions))); }
@@ -223,6 +223,21 @@ struct TopicPostCard {
   @Computed
   get heartCount(): number {
     return this.post.reactions.find((reaction: Reaction): boolean => reaction.id === 'heart')?.count || 0;
+  }
+
+  @Computed
+  get primaryReaction(): string {
+    // LINUX DO's visible primary control uses heart. Like the official client,
+    // an existing emoji is toggled off instead of silently changed into heart.
+    return this.post.currentUserReaction?.id || 'heart';
+  }
+
+  @Computed
+  get reactionLabel(): string {
+    const selected: Reaction | undefined = this.post.currentUserReaction;
+    if (selected !== undefined && selected.id !== 'heart') { return '✓ 已回应'; }
+    return `${selected !== undefined ? '♥' : '♡'} ${this.heartCount > 0 ? this.heartCount :
+      (selected !== undefined ? '已喜欢' : '喜欢')}`;
   }
 
   @Computed
@@ -318,11 +333,14 @@ struct TopicPostCard {
           Text('✓ 已解决').fontSize(11).fontColor($r('app.color.accent'))
         }
         Blank()
-        Button(`${this.post.currentUserReaction?.id === 'heart' ? '♥' : '♡'} ${this.heartCount > 0 ? this.heartCount : '喜欢'}`,
-          { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40).fontSize(12).fontColor($r('app.color.text_secondary'))
-          .enabled(this.canReact).onClick(() => { this.onReact(this.post, 'heart'); })
+        Button(this.reactionLabel,
+          { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40).fontSize(12)
+          .fontColor(this.post.currentUserReaction !== undefined ? $r('app.color.accent') : $r('app.color.text_secondary'))
+          .enabled(this.canReact).onClick(() => { this.onReact(this.post, this.primaryReaction); })
           .bindContextMenu(this.reactionMenu, ResponseType.LongPress)
-          .accessibilityText('点按喜欢，长按选择回应表情')
+          .accessibilityText(this.post.currentUserReaction === undefined ? '点按喜欢，长按选择回应表情' :
+            (this.post.currentUserReaction.canUndo ? '已回应，点按撤销，长按选择回应表情' : '已回应，已超过可撤销时间'))
+          .id(`post_reaction_${this.post.id}`)
         if (this.canReply || (!this.loggedIn && this.topicState.length === 0)) {
           Button('回复', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40).fontSize(12)
             .fontColor($r('app.color.accent')).enabled(!this.busy)
@@ -345,22 +363,19 @@ struct TopicPostCard {
         }.width('100%')
       }
       if (this.post.boosts.length > 0) {
-        Column({ space: 8 }) {
-          ForEach(this.expandedBoosts ? this.post.boosts : this.post.boosts.slice(0, 3), (boost: Boost) => {
-            Row({ space: 6 }) {
-              Text(boost.user?.username || '用户').fontSize(12).fontColor($r('app.color.text_secondary'))
-              RichPostContent({ cooked: boost.cooked, compact: true, reduceMotion: this.reduceMotion,
-                onOpenLink: this.onOpenLink, onPicture: this.onPicture }).layoutWeight(1)
-              if (boost.canDelete) {
-                Button('删除', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(12).height(40).enabled(!this.busy)
-                  .onClick(() => { this.onDeleteBoost(this.post, boost); })
-              }
-            }.padding({ left: 8, right: 8, top: 4, bottom: 4 })
+        Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
+          ForEach(this.post.boosts, (boost: Boost) => {
+            BoostBubble({ boost: boost, busy: this.busy, reduceMotion: this.reduceMotion,
+              onOpenLink: this.onOpenLink, onPicture: this.onPicture,
+              onDelete: (item: Boost): void => { this.onDeleteBoost(this.post, item); } })
+              .margin({ right: 4, bottom: 4 })
           }, (boost: Boost): string => boost.id.toString())
-          if (this.post.boosts.length > 3) {
-            Button(this.expandedBoosts ? '收起简评' : `更多简评（${this.post.boosts.length - 3}）`,
-              { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(12)
-              .onClick(() => { this.expandedBoosts = !this.expandedBoosts; })
+          if (this.post.canBoost) {
+            Button({ type: ButtonType.Circle, buttonStyle: ButtonStyleMode.TEXTUAL }) {
+              SymbolGlyph($r('sys.symbol.plus_circle')).fontSize(19).fontColor([$r('app.color.text_secondary')])
+            }.width(36).height(36).enabled(!this.busy)
+              .accessibilityText(this.boosting ? '收起简评输入' : '写简评').id(`post_add_boost_${this.post.postNumber}`)
+              .onClick((): void => { this.boosting = !this.boosting; })
           }
         }.width('100%')
       }
@@ -426,6 +441,7 @@ export struct TopicPage {
   private lastInputNumber: number = 1;
   private handledReloadSignal: number = 0;
   private hidden: boolean = false;
+  private pendingVisibleReload: number = 0;
   private topicOwnerId: number = 0;
   private writeRequest: RequestCancellation | undefined = undefined;
   private readonly source: TopicRowsSource = new TopicRowsSource();
@@ -511,6 +527,7 @@ export struct TopicPage {
   @Monitor('session.revision')
   accountChanged(): void {
     this.resetReaderControls();
+    this.pendingVisibleReload = 0;
     this.writeRequest?.cancel();
     this.writeRequest = undefined;
     this.writeBusy = false;
@@ -547,7 +564,14 @@ export struct TopicPage {
   }
 
   private endWrite(request: RequestCancellation): void {
-    if (this.writeRequest === request) { this.writeRequest = undefined; this.writeBusy = false; }
+    if (this.writeRequest !== request) { return; }
+    this.writeRequest = undefined;
+    const number: number = this.pendingVisibleReload;
+    this.pendingVisibleReload = 0;
+    this.writeBusy = false;
+    // Returning while a mutation is in flight needs one read of server truth.
+    // Repeating a toggle would undo the successful action, so only reload here.
+    if (number > 0 && !this.hidden) { void this.reload(number); }
   }
 
   @Computed
@@ -701,7 +725,10 @@ export struct TopicPage {
   }
 
   private async reload(number: number = 1): Promise<void> {
-    if (this.loading || this.writeBusy) { this.refreshing = false; return; }
+    if (this.hidden) { return; }
+    if (this.writeBusy) { this.pendingVisibleReload = number; this.refreshing = false; return; }
+    if (this.loading) { this.refreshing = false; return; }
+    this.pendingVisibleReload = 0;
     this.resetReaderControls();
     const request: number = ++this.generation;
     const owner: number = this.session.user?.id || 0;
@@ -829,9 +856,19 @@ export struct TopicPage {
     const cancellation: RequestCancellation = this.startWrite();
     try {
       const result: Post = await forumApi.toggleReaction(post.id, reaction, cancellation);
-      if (request === this.generation) { this.mergePosts([result]); }
+      if (request !== this.generation || this.hidden || cancellation.isCancelled) { return; }
+      this.mergePosts([result]);
+      const message: string = result.currentUserReaction === undefined ? '已取消回应' :
+        (result.currentUserReaction.id === 'heart' ? '已喜欢' : '已添加回应');
+      this.getUIContext().getPromptAction().showToast({ message: message });
     }
-    catch (error) { if (request === this.generation) { this.error = failureMessage(error); } }
+    catch (error) {
+      if (request === this.generation && !this.hidden && !cancellation.isCancelled &&
+        !(error instanceof ForumApiError && error.kind === ForumErrorKind.Cancelled)) {
+        this.error = failureMessage(error);
+        this.getUIContext().getPromptAction().showToast({ message: this.error });
+      }
+    }
     finally { this.endWrite(cancellation); }
   }
 
@@ -1068,6 +1105,8 @@ export struct TopicPage {
         .textOverflow({ overflow: TextOverflow.Ellipsis }).id('topic_title_context')
     }.layoutWeight(1).height(56).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Start)
       .padding({ right: 12 })
+      .id('topic_header_return_top').accessibilityDescription('双击标题区域回到话题顶部')
+      .gesture(TapGesture({ count: 2 }).onAction((): void => { this.backToTopicTop(); }))
   }
 
   @Builder
@@ -1320,6 +1359,6 @@ export struct TopicPage {
         this.reload(number);
       })
       .onHidden(() => { this.dismissEndFeedback(); this.scrollPolicy.reset(); this.showPicture = false;
-        this.hidden = true; this.generation++; this.loading = false; this.refreshing = false; })
+        this.hidden = true; this.pendingVisibleReload = 0; this.generation++; this.loading = false; this.refreshing = false; })
   }
 }

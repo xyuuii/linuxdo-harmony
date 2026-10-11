@@ -2,7 +2,8 @@ import { TopicListItem, TopicPage } from '../models/ForumModels';
 import { forumApi, ForumApiError, ForumErrorKind, RequestCancellation } from '../services/ForumApi';
 import { forumSession } from '../models/ForumSession';
 import { AppearanceSettings } from '../models/AppearanceSettings';
-import { TopicRow, ForumErrorView } from './ForumComponents';
+import { TopicRow, PinnedTopicsBlock, ForumErrorView } from './ForumComponents';
+import { splitTopicFeed, TopicFeedSections } from '../services/TopicFeedPresentation';
 
 @ComponentV2
 export struct TopicFeed {
@@ -10,6 +11,7 @@ export struct TopicFeed {
   @Param categoryId: number = 0;
   @Param categorySlug: string = '';
   @Param reloadSignal: number = 0;
+  @Param refreshTopSignal: number = 0;
   @Param active: boolean = true;
   @Param appearance: AppearanceSettings = new AppearanceSettings();
   @Param listScroller: Scroller = new Scroller();
@@ -31,10 +33,52 @@ export struct TopicFeed {
   private generation: number = 0;
   private request: RequestCancellation | undefined = undefined;
   private autoTimer: number = -1;
+  private visible: boolean = false;
+  private consumedRefreshTopSignal: number = 0;
+  private pendingTopRefresh: boolean = false;
+
+  @Computed
+  get sections(): TopicFeedSections { return splitTopicFeed(this.items); }
+
+  @Monitor('refreshTopSignal', 'active')
+  refreshLatestFromTop(): void {
+    if (!this.visible || !this.active || this.categoryId > 0) { return; }
+    if (this.refreshTopSignal > this.consumedRefreshTopSignal) {
+      this.consumedRefreshTopSignal = this.refreshTopSignal;
+      // Native List edges include contentStartOffset; raw y=0 would omit the immersive inset.
+      try { this.listScroller.scrollEdge(Edge.Top); } catch (_) {}
+      this.pendingTopRefresh = true;
+    }
+    if (!this.pendingTopRefresh || this.busy) { return; }
+    this.pendingTopRefresh = false;
+    this.refreshing = true;
+    void this.load(true);
+  }
+
+  private refreshFromPull(): void {
+    // Setting refreshing from the tab signal may also emit native onRefreshing.
+    if (this.busy) { return; }
+    this.refreshing = true;
+    void this.load(true);
+  }
+
+  private appear(): void {
+    this.visible = true;
+    this.refreshLatestFromTop();
+    if (!this.loaded && !this.busy) { void this.load(true); }
+    this.configureTimer();
+  }
+
+  private disappear(): void {
+    this.visible = false;
+    this.request?.cancel();
+    if (this.autoTimer >= 0) { clearInterval(this.autoTimer); this.autoTimer = -1; }
+  }
 
   @Monitor('reloadSignal')
   onReload(): void {
     this.request?.cancel(); this.generation++;
+    this.pendingTopRefresh = false;
     this.items = []; this.page = 0; this.hasMore = false; this.loaded = false;
     void this.load(true);
   }
@@ -79,7 +123,10 @@ export struct TopicFeed {
       this.needsVerification = error instanceof ForumApiError &&
         (error.kind === ForumErrorKind.VerificationRequired || error.kind === ForumErrorKind.AuthenticationRequired);
     } finally {
-      if (this.generation === generation) { this.busy = false; this.refreshing = false; }
+      if (this.generation === generation) {
+        this.busy = false; this.refreshing = false;
+        this.refreshLatestFromTop();
+      }
     }
   }
 
@@ -103,7 +150,13 @@ export struct TopicFeed {
             }.padding({ top: 8, bottom: 4 }).width('100%')
           }
         }
-        ForEach(this.items, (item: TopicListItem) => {
+        if (this.sections.pinned.length > 0) {
+          ListItem() {
+            PinnedTopicsBlock({ items: this.sections.pinned,
+              onOpen: (id: number): void => { this.onOpenTopic(id, 1); } })
+          }
+        }
+        ForEach(this.sections.topics, (item: TopicListItem) => {
           ListItem() { TopicRow({ item: item, onOpen: (id: number): void => { this.onOpenTopic(id, 1); } }) }
         }, (item: TopicListItem): string => String(item.topic.id))
         ListItem() {
@@ -133,8 +186,8 @@ export struct TopicFeed {
         })
         .onReachEnd(() => { if (this.loaded && this.hasMore && !this.busy && !this.error) { void this.load(false); } })
     }.width('100%').height('100%')
-      .onRefreshing(() => { this.refreshing = true; void this.load(true); })
-      .onAppear(() => { if (!this.loaded) { void this.load(true); } this.configureTimer(); })
-      .onDisAppear(() => { this.request?.cancel(); if (this.autoTimer >= 0) { clearInterval(this.autoTimer); this.autoTimer = -1; } })
+      .onRefreshing(() => { this.refreshFromPull(); })
+      .onAppear(() => { this.appear(); })
+      .onDisAppear(() => { this.disappear(); })
   }
 }
