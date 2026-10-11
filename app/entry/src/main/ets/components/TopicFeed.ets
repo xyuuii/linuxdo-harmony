@@ -13,6 +13,9 @@ export struct TopicFeed {
   @Param active: boolean = true;
   @Param appearance: AppearanceSettings = new AppearanceSettings();
   @Param listScroller: Scroller = new Scroller();
+  @Param topInset: number = 0;
+  @Param bottomInset: number = 0;
+  @Param immersiveTop: boolean = false;
   @Event onReadScroll: (offset: number, state: ScrollState, source: ScrollSource) => void = (): void => {};
   @Event onOpenTopic: (id: number, postNumber: number) => void = (): void => {};
   @Event onVerify: () => void = (): void => {};
@@ -123,10 +126,14 @@ export struct TopicFeed {
           }
         }
       }.width('100%').height('100%').padding({ left: 14, right: 14 }).id('topic_feed_list')
-        .contentEndOffset(this.categoryId > 0 ? 12 : 92)
-        .scrollBar(BarState.Off).onWillScroll(this.onReadScroll)
+        .contentStartOffset(this.topInset).contentEndOffset((this.categoryId > 0 ? 12 : 92) + this.bottomInset)
+        .scrollBar(BarState.Off).onWillScroll((offset: number, state: ScrollState, source: ScrollSource): ScrollResult => {
+          this.onReadScroll(offset, state, source);
+          return { offsetRemain: offset };
+        })
         .onReachEnd(() => { if (this.loaded && this.hasMore && !this.busy && !this.error) { void this.load(false); } })
-    }.width('100%').height('100%').onRefreshing(() => { this.refreshing = true; void this.load(true); })
+    }.width('100%').height('100%')
+      .onRefreshing(() => { this.refreshing = true; void this.load(true); })
       .onAppear(() => { if (!this.loaded) { void this.load(true); } this.configureTimer(); })
       .onDisAppear(() => { this.request?.cancel(); if (this.autoTimer >= 0) { clearInterval(this.autoTimer); this.autoTimer = -1; } })
   }

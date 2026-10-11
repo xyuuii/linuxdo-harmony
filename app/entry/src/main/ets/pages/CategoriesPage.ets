@@ -9,6 +9,8 @@ interface CategoryGroup { parent: Category; levels: Category[]; }
 export struct CategoriesPage {
   @Param reloadSignal: number = 0;
   @Param listScroller: Scroller = new Scroller();
+  @Param topInset: number = 0;
+  @Param bottomInset: number = 0;
   @Event onReadScroll: (offset: number, state: ScrollState, source: ScrollSource) => void = (): void => {};
   @Event onOpenCategory: (category: Category) => void = (): void => {};
   @Event onVerify: () => void = (): void => {};
@@ -101,6 +103,7 @@ export struct CategoriesPage {
   }
 
   build() {
+    Column() {
     List({ scroller: this.listScroller, space: 8 }) {
       ListItem() {
         Text('分类').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
@@ -117,9 +120,14 @@ export struct CategoriesPage {
           Text('暂时没有可浏览的分类').fontColor($r('app.color.text_secondary')).padding(24)
         }
       }
-    }.width('100%').height('100%').padding({ left: 14, right: 14 }).contentEndOffset(92)
-      .scrollBar(BarState.Off).onWillScroll(this.onReadScroll)
+    }.width('100%').height('100%').padding({ left: 14, right: 14 })
+      .contentStartOffset(this.topInset).contentEndOffset(92 + this.bottomInset)
+      .scrollBar(BarState.Off).onWillScroll((offset: number, state: ScrollState, source: ScrollSource): ScrollResult => {
+          this.onReadScroll(offset, state, source);
+          return { offsetRemain: offset };
+        })
       .onAppear(() => { if (!this.categories.length) { void this.load(false); } })
       .onDisAppear(() => { this.request?.cancel(); })
+    }.width('100%').height('100%')
   }
 }

@@ -8,6 +8,8 @@ import { constrainViewerOffset, viewerIndex, viewerScale, ViewerOffset, ViewerSi
 export struct ForumImageViewer {
   @Param urls: string[] = [];
   @Param initialIndex: number = 0;
+  @Param topInset: number = 0;
+  @Param bottomInset: number = 0;
   @Param ownerId: number = forumSession.user?.id || 0;
   @Param aspectRatios: number[] = [];
   @Param saving: boolean = false;
@@ -144,7 +146,7 @@ export struct ForumImageViewer {
           .fontWeight(FontWeight.Medium).layoutWeight(1).textAlign(TextAlign.Center)
           .id('viewer_page_count').accessibilityText(`第 ${this.currentIndex + 1} 张，共 ${this.urls.length} 张`)
         Blank().width(48).hitTestBehavior(HitTestMode.None)
-      }.width('100%').padding({ left: 8, right: 8, top: 8, bottom: 4 }).backgroundColor('#66000000')
+      }.width('100%').padding({ left: 8, right: 8, top: 8 + this.topInset, bottom: 4 }).backgroundColor('#66000000')
       Blank().hitTestBehavior(HitTestMode.None)
       Row({ space: 12 }) {
         if (this.urls.length > 1) {
@@ -168,7 +170,7 @@ export struct ForumImageViewer {
           }.width(44).height(44).id('viewer_next').enabled(this.currentIndex < this.urls.length - 1)
             .accessibilityText('下一张').onClick((): void => { this.swiper.changeIndex(this.currentIndex + 1, true); })
         }
-      }.width('100%').padding({ left: 16, right: 16, top: 12, bottom: 16 }).backgroundColor('#66000000')
+      }.width('100%').padding({ left: 16, right: 16, top: 12, bottom: 16 + this.bottomInset }).backgroundColor('#66000000')
     }.width('100%').height('100%').hitTestBehavior(HitTestMode.Transparent)
   }
 

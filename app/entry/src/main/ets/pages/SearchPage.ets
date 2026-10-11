@@ -7,6 +7,8 @@ import { plainText } from '../services/ForumPresentation';
 export struct SearchPage {
   @Param reloadSignal: number = 0;
   @Param listScroller: Scroller = new Scroller();
+  @Param topInset: number = 0;
+  @Param bottomInset: number = 0;
   @Event onReadScroll: (offset: number, state: ScrollState, source: ScrollSource) => void = (): void => {};
   @Event onOpenTopic: (id: number, postNumber: number) => void = (): void => {};
   @Event onVerify: () => void = (): void => {};
@@ -62,19 +64,21 @@ export struct SearchPage {
 
   build() {
     Column({ space: 10 }) {
-      Text('搜索').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
-        .width('100%').padding({ top: 12 })
-      Search({ value: this.query, placeholder: '搜索话题、关键词、用户名' })
-        .searchButton('搜索').height(44).backgroundColor($r('app.color.surface'))
-        .onChange((value: string) => { this.query = value; })
-        .onSubmit(() => { void this.search(true); }).id('forum_search')
-      Row() {
-        Text('排序').fontSize(14).fontColor($r('app.color.text_secondary'))
-        Blank()
-        Select(searchOrders.map((order): SelectOption => { return { value: order.label }; }))
-          .selected(this.orderIndex).value(searchOrders[this.orderIndex].label)
-          .onSelect((index: number) => { this.orderIndex = index; if (this.query.trim()) { void this.search(true); } })
-      }.width('100%')
+      Column({ space: 10 }) {
+        Text('搜索').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+          .width('100%').padding({ top: 12 })
+        Search({ value: this.query, placeholder: '搜索话题、关键词、用户名' })
+          .searchButton('搜索').height(44).backgroundColor($r('app.color.surface'))
+          .onChange((value: string) => { this.query = value; })
+          .onSubmit(() => { void this.search(true); }).id('forum_search')
+        Row() {
+          Text('排序').fontSize(14).fontColor($r('app.color.text_secondary'))
+          Blank()
+          Select(searchOrders.map((order): SelectOption => { return { value: order.label }; }))
+            .selected(this.orderIndex).value(searchOrders[this.orderIndex].label)
+            .onSelect((index: number) => { this.orderIndex = index; if (this.query.trim()) { void this.search(true); } })
+        }.width('100%')
+      }.width('100%').padding({ top: this.topInset })
       List({ scroller: this.listScroller, space: 6 }) {
         ForEach(this.items, (item: TopicListItem) => {
           ListItem() {
@@ -99,7 +103,11 @@ export struct SearchPage {
             }.width('100%').padding({ top: 64, bottom: 24 })
           }
         }
-      }.width('100%').layoutWeight(1).scrollBar(BarState.Off).contentEndOffset(92).onWillScroll(this.onReadScroll)
+      }.width('100%').height('100%').layoutWeight(1)
+        .scrollBar(BarState.Off).contentEndOffset(92 + this.bottomInset).onWillScroll((offset: number, state: ScrollState, source: ScrollSource): ScrollResult => {
+          this.onReadScroll(offset, state, source);
+          return { offsetRemain: offset };
+        })
     }.width('100%').height('100%').padding({ left: 14, right: 14 })
       .onDisAppear(() => { this.request?.cancel(); })
   }

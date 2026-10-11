@@ -6,6 +6,8 @@ import { ForumAvatar, ForumErrorView } from '../components/ForumComponents';
 
 @ComponentV2
 export struct ProfileSectionPage {
+  @Param topInset: number = 0;
+  @Param bottomInset: number = 0;
   @Param session: ForumSession = forumSession;
   @Param section: ProfileSection = ProfileSection.Summary;
   @Event onOpenTopic: (id: number, postNumber: number) => void = (): void => {};
@@ -100,7 +102,8 @@ export struct ProfileSectionPage {
           }
         }
       }.width('100%').height('100%').padding(20).scrollBar(BarState.Off)
-    }.title(this.title()).backgroundColor($r('app.color.page_background'))
+    }.title(this.title()).padding({ top: this.topInset, bottom: this.bottomInset })
+      .backgroundColor($r('app.color.page_background'))
       .onReady(() => { void this.load(true); }).onDisAppear(() => { this.request?.cancel(); })
   }
 }

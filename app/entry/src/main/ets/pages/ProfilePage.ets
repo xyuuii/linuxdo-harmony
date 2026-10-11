@@ -10,6 +10,8 @@ interface ProfileMenuItem { id: ProfileSection; title: string; subtitle: string;
 export struct ProfilePage {
   @Param appearance: AppearanceSettings = loadAppearanceSettings();
   @Param listScroller: Scroller = new Scroller();
+  @Param topInset: number = 0;
+  @Param bottomInset: number = 0;
   @Event onReadScroll: (offset: number, state: ScrollState, source: ScrollSource) => void = (): void => {};
   @Event onLogin: () => void = (): void => {};
   @Event onOpenSection: (section: ProfileSection) => void = (): void => {};
@@ -87,7 +89,7 @@ export struct ProfilePage {
             })
         }
       }.width('100%').constraintSize({ maxWidth: 640 }).alignItems(HorizontalAlign.Start)
-        .padding({ left: 20, right: 20, top: 24, bottom: 112 })
+        .padding({ left: 20, right: 20, top: 24 + this.topInset, bottom: 112 + this.bottomInset })
     }.width('100%').height('100%').scrollBar(BarState.Off)
       .onWillScroll((_x: number, y: number, state: ScrollState, source: ScrollSource): void => {
         this.onReadScroll(y, state, source);

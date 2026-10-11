@@ -88,13 +88,16 @@ function readerRuntime() {
       captures = 0;
       restores = [];
       indexCalls = [];
+      edgeCalls = [];
       atEnd = false;
       currentOffset() { this.captures++; return { ...this.offset }; }
       isAtEnd() { return this.atEnd; }
       scrollTo(value) { this.restores.push(value); this.offset = { xOffset: value.xOffset, yOffset: value.yOffset }; }
       scrollToIndex(...args) { this.indexCalls.push(args); }
+      scrollEdge(...args) { this.edgeCalls.push(args); }
     },
     ScrollAlign: { START: 'start' },
+    Edge: { Top: 'top' },
     window: { getLastWindow: async () => ({ setWindowSystemBarProperties: async value => { bars.push(value); } }) },
     $r: id => ({ id }),
     setTimeout(callback, delay) { const id = ++timerId; timers.push({ id, callback, delay }); return id; },
@@ -278,6 +281,33 @@ function endedTopic(page) {
   page.scroller.offset.yOffset = 800;
 }
 
+test('reader toolbar thresholds use traveled distance from the negative title-aware list origin', () => {
+  for (const topInset of [0, 38.85, 56]) {
+    const { page } = readerRuntime();
+    page.topInset = topInset;
+    const nativeStart = -(topInset + 56);
+    page.scroller.offset.yOffset = nativeStart + 2;
+    page.readScroll(20, ScrollState.Scroll, ScrollSource.DRAG);
+    assert.equal(page.toolbarExpanded, true);
+    page.scroller.offset.yOffset = nativeStart + 22;
+    assert.ok(page.scroller.offset.yOffset < 0, 'A moved list may legitimately retain a negative native offset.');
+    page.readScroll(12, ScrollState.Scroll, ScrollSource.DRAG);
+    assert.equal(page.toolbarExpanded, false, '32 vp of forward reading must collapse even before native offset reaches zero.');
+
+    page.scroller.offset.yOffset = nativeStart + 54;
+    page.readScroll(-8, ScrollState.Scroll, ScrollSource.DRAG);
+    assert.equal(page.toolbarExpanded, false);
+    page.scroller.offset.yOffset = nativeStart + 46;
+    page.readScroll(-8, ScrollState.Scroll, ScrollSource.DRAG);
+    assert.equal(page.toolbarExpanded, true, '16 vp of reverse reading must restore the controls.');
+
+    page.toolbarExpanded = false;
+    page.scroller.offset.yOffset = nativeStart;
+    page.readScroll(-1, ScrollState.Scroll, ScrollSource.DRAG);
+    assert.equal(page.toolbarExpanded, true, 'Returning to the actual negative origin must reveal the controls.');
+  }
+});
+
 test('end feedback requires a new upward DRAG after the true topic end, never arrival, FLING or a programmatic scroll', () => {
   const { page, timers, animations } = readerRuntime();
   endedTopic(page);
@@ -335,10 +365,12 @@ test('return to top reloads the initial slice when only a retained root remains,
   page.backToTopicTop();
   assert.deepEqual(reads, [1], 'A retained original post does not supply its omitted first-page replies.');
   assert.deepEqual(page.scroller.restores, [], 'The tail window must reload before positioning the reader.');
+  assert.deepEqual(page.scroller.edgeCalls, [], 'An edge jump cannot replace the missing initial slice.');
 
-  for (const reduceMotion of [false, true]) {
+  for (const [topInset, reduceMotion] of [[0, false], [0, true], [38.85, false], [38.85, true], [56, false], [56, true]]) {
     const { page: head, reads: headReads } = readerRuntime();
     endedTopic(head);
+    head.topInset = topInset;
     head.appearance.reduceMotion = reduceMotion;
     head.sliceStart = 0;
     head.currentNumber = 2;
@@ -347,12 +379,12 @@ test('return to top reloads the initial slice when only a retained root remains,
     assert.deepEqual(headReads, []);
     assert.equal(head.currentNumber, 1);
     assert.equal(head.highlightedId, 0);
-    assert.equal(head.scroller.restores.length, 1);
-    const restored = head.scroller.restores[0];
-    assert.equal(restored.xOffset, 0);
-    assert.equal(restored.yOffset, 0);
-    if (reduceMotion) { assert.equal(restored.animation, false); }
-    else { assert.ok(restored.animation.curve, 'Normal-motion return uses the native animation curve.'); }
+    assert.deepEqual(head.scroller.restores, [], 'A numeric zero jump is not the title-aware list origin.');
+    assert.equal(head.scroller.edgeCalls.length, 1);
+    const edge = head.scroller.edgeCalls[0];
+    assert.equal(edge[0], 'top');
+    if (reduceMotion) { assert.equal(edge.length, 1, 'Reduced motion uses the native immediate edge jump without velocity.'); }
+    else { assert.deepEqual(edge[1], { velocity: 1200 }, 'Normal motion returns smoothly to the true native edge.'); }
   }
 });
 

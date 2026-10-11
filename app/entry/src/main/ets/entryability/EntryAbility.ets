@@ -17,6 +17,7 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { BusinessError } from '@kit.BasicServicesKit';
 
 const DOMAIN = 0x0000;
 
@@ -37,6 +38,20 @@ export default class EntryAbility extends UIAbility {
   onWindowStageCreate(windowStage: window.WindowStage): void {
     // Main window is created, set main page for this ability
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageCreate');
+
+    void this.configureMainWindowAndLoad(windowStage);
+  }
+
+  private async configureMainWindowAndLoad(windowStage: window.WindowStage): Promise<void> {
+    try {
+      const mainWindow: window.Window = await windowStage.getMainWindow();
+      await mainWindow.setWindowLayoutFullScreen(true);
+    } catch (error) {
+      const code: number = (error as BusinessError)?.code;
+      hilog.warn(DOMAIN, 'LinuxDoWindow',
+        'Full-window layout unavailable (code %{public}d); continuing with default layout',
+        Number.isFinite(code) ? code : -1);
+    }
 
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {

@@ -1,4 +1,4 @@
-# 帖子阅读交互（0.2.1）
+# 帖子阅读交互（0.2.2）
 
 0.2.1参考实际手机上的酷安鸿蒙版7.1.1（com.coolapk.hmclient）：通过HDC观察用户Pura X View / HarmonyOS 7 / API 26的真实界面，采用顶部作者信息、自然铺开的正文与底部左侧评论入口、右侧常用动作组。酷安向下长滑时隐藏整条导航、反向滚动复原；本项目结合用户要求保留单按钮收起形态。参考截图只留在本机被忽略的artifacts目录，未复制酷安源码、图标或媒体资源。
 
@@ -6,32 +6,42 @@
 
 ## 页面层级
 
-- 原生NavDestination提供56vp作者/话题双行吸顶标题，系统负责避让；标题内容显示作者与截断话题名，通过systemMaterial按外观等级应用系统材质。
+- NavDestination隐藏原生标题占位，内容区自绘固定作者/话题双行标题，高度为topInset+56vp；返回按钮与文字放在状态区下方，单层系统背景模糊覆盖标题与状态区。关闭效果或高对比时使用实色。标题返回沿NavPathStack退回，系统返回保留NavDestination语义，看图时优先关闭看图层。
 - 主楼保留作者头像、楼主标记、楼层与完整标题，正文满宽。
 - 回复连续排列并用细分隔线区分，楼中楼内缩且用浅底呈现，三条预览与展开收起保留真实树形语义。
 - 喜欢及回复常用操作在正文后；长按喜欢选择其他回应，更多菜单按真实权限提供编辑、删除、简评及解决方案。
-- 底部左侧“写回复”胶囊一次进入编辑器，右侧HdsActionBar提供楼层、回顶与展开收起控制。关闭、归档或无回复权限时禁用回复，并通过文字和无障碍标签说明状态。
+- 底部左侧“写回复”胶囊一次进入编辑器，右侧HdsActionBar提供楼层、回顶与展开收起控制。工具层的底部避让为4vp+bottomInset，不把操作控件延伸进手势区。关闭、归档或无回复权限时禁用回复，并通过文字和无障碍标签说明状态。
+
+## 窗口、系统区与输入法
+
+EntryAbility先获取主窗口、等待setWindowLayoutFullScreen(true)成功，再loadContent；获取窗口或布局设置失败仍继续加载默认布局，窗口布局失败只记录安全错误码。Index使用@Env(SystemProperties.WINDOW_AVOID_AREA)的vp值计算动态避让：顶部取statusBar/cutout最大值，底部取navigationIndicator/statusBar/cutout最大值，重叠区域不相加；键盘高度单独处理。
+
+Root与Navigation负责全窗口区域扩展，子List/Refresh不重复叠加ignoreLayoutSafeArea，保持继承的100%滚动视口。最新、分类、搜索和我的内容延伸到系统栏后方，首尾内容与控件各按对应边界避让一次。帖子首尾使用contentStartOffset(topInset+56)与contentEndOffset(84+bottomInset)，正文可从固定标题和底部工具背后滚过。
+
+主页面顶部EdgeBackdrop仅对背景做高斯模糊与主题渐隐，backgroundEffect的radius按轻柔/标准/丰富取12/20/28，关闭时为0，高对比时为实色。该层只读，不响应触摸或交互光晕。帖子固定标题使用一层backgroundBlurStyle，控件沉浸材质仍由materialFor负责。Root保持100%高度并采用UIContext RESIZE，键盘可见时隐藏主导航。普通设置、分类详情、编辑器、登录、关于、通知和用户页面在其原生NavDestination上避让，原生标题和返回控件一起放到状态区下方；帖子自绘标题只避让一次。
 
 ## 阅读动效
 
 使用官方有主按钮的 HdsActionBar 展开/收缩动效。向话题尾部累计滚动32vp后收缩，左侧写回复入口同步淡出并收窄；反向回读16vp后展开，点击浮动主按钮也可手动恢复。浮层不改变列表视口高度，避免收缩时跳动。按钮的ButtonModifier接入系统沉浸光感材质，背板透明且关闭额外模糊，避免重复叠加。开启减少动态效果时移除收缩主按钮，写回复、楼层与回顶保持静态可见。
 
-末尾不保留静态提示区。List启用末端Spring回弹；onWillScroll只有在真实话题加载完成、没有下一页且用户到末尾继续上拉时才跟手显示提示。单纯触底、程序滚动、惯性和回弹不触发提示；松手后使用springMotion回归，保留约3.2秒后淡出。提示带回顶按钮，工具栏也提供回顶，长首楼同样可用。尾部分页模式下重新加载首批楼层，完整首批内容已在列表中时平滑滚到标题。看图、换账号、重新加载或离开页面清理提示及定时器。
+末尾不保留静态提示区。List启用末端Spring回弹；onWillScroll只有在真实话题加载完成、没有下一页且用户到末尾继续上拉时才跟手显示提示。单纯触底、程序滚动、惯性和回弹不触发提示；松手后使用springMotion回归，保留约3.2秒后淡出。提示带回顶按钮，工具栏也提供回顶，长首楼同样可用。尾部分页模式下重新加载首批楼层；完整首批内容已在列表中时使用scrollEdge(Edge.Top)平滑回到真实顶部，减少动态时直接回顶。看图、换账号、重新加载或离开页面清理提示及定时器。
 
-标题接口依据本机API26 SDK的nav_destination.d.ts:622：NavDestination.title支持NavDestinationCustomTitle，其中builder提供标题内容、height设置标题栏高度。本项目使用title({ builder: readerTitle, height: 56 })，系统负责安全区避让，标题内容使用systemMaterial。工具栏与动效依据HdsActionBar.d.ets及官方文档[有主按钮的核心操作栏](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ui-design-actionbar-main-buttons)、[滚动组件通用接口](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/ts-container-scrollable-common)和[弹簧曲线](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-spring-curve)。没有替换论坛分页、身份或权限实现。
+0.2.1的标题曾使用NavDestinationCustomTitle；0.2.2将标题绘制到全窗口内容上的固定层中。工具栏与动效依据HdsActionBar.d.ets及官方文档[有主按钮的核心操作栏](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ui-design-actionbar-main-buttons)、[滚动组件通用接口](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/ts-container-scrollable-common)和[弹簧曲线](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-spring-curve)。论坛分页、身份与权限继续使用原有实现。
 
 ## 主页面导航
 
 首页、分类、搜索和我的使用常驻AdaptiveNavigationBar。向下浏览时，同一个材质表面收拢为右下当前页图标按钮；反向浏览或点击按钮展开为完整页签。表面使用materialFor系统材质，四个图标节点使用稳定key，收拢与展开共享一个弹簧progress：表面宽高与位置、图标位移和文字透明度连续变化。开启减少动态效果或高对比时主导航保持静态展开。
 
-HdsTabs仅负责主页面内容切换，barHeight设为0。四页保留独立Scroller和原始阅读偏移，只有当前主页面的用户滚动参与方向累计；网页认证、子路由或程序滚动不收起主导航。AdaptiveNavigationBar从完整胶囊到单按钮都使用同一个Stack，图标节点持续存在。
+HdsTabs仅负责主页面内容切换，barHeight设为0。四页保留独立Scroller和原始阅读偏移，只有当前可见主页面的用户滚动参与方向累计；网页认证、子路由或程序滚动不收起主导航。最新/分类的原始初始偏移为负topInset，搜索/我的初始偏移为0；方向判断按实际contentStartOffset归一化，避免把已经向下阅读的负偏移误判成起点。AdaptiveNavigationBar从完整胶囊到单按钮都使用同一个Stack，图标节点持续存在。离开主页面时隐藏主导航，返回时展开并清理方向累计；键盘显示时也隐藏主导航。
 
-最终版完整SDK构建和安装通过，模拟器已观察到主栏收拢和点击展开，正文仍可正常滚动。主导航控制有4项离线回归，变形几何另有4项回归；总计81项测试通过。Pura X View仅用于观察酷安，本客户端仍以模拟器验收；没有新增本客户端物理设备光感或功耗结论。
+当前93项离线回归已通过，其中主导航控制5项、变形几何4项、系统区避让4项、窗口启动3项、回顶持久控件3项；离线回归不替代原生视口、手势、输入法及光感验收。版本设备结果见[验收记录](acceptance.md)。Pura X View用于观察酷安，本客户端的设备观察仍来自模拟器，未增加物理设备光感或功耗结论。
 
 ## 图片
 
 正文图片保留 HTML/原图宽高，解码后用自然尺寸校正。横图、方图与普通竖图占满正文宽度；长图提供顶部大预览和完整查看提示。emoji 和小站点图标仍是行内尺寸，默认“帖子图片”图注不再占空间。
 
-点开图片后采用全屏黑底，画廊只包含当前楼层原图并去重。单击显隐控件，双击1/2.5倍切换，双指1～5倍缩放；放大时限制平移且关闭翻页手势，原始倍率可左右换图。保存由系统 SaveButton 临时授权触发。
+点开图片后采用全窗口黑底，画廊只包含当前楼层原图并去重。图片背景覆盖上下系统区，顶部返回/页码和底部保存/翻图控件分别加topInset与bottomInset避让。单击显隐控件，双击1/2.5倍切换，双指1～5倍缩放；放大时限制平移且关闭翻页手势，原始倍率可左右换图。保存由系统 SaveButton 临时授权触发。
 
 关闭按钮与系统返回仅关闭看图层，恢复打开时的滚动偏移，不重载或跳到首楼；看图期间不触发底层自动加载。换账号清空画廊并取消旧图片回调。网络、凭据及论坛权限边界保持原有实现。
+
+0.2.2 主导航在同一材质Stack内保留独立的只读模糊背板：轻柔/标准/丰富的radius分别为16/24/32，背景染色随主题变化；光感由外层系统沉浸材质提供。模糊不因减少动态效果关闭，收起和展开共用同一个背板。回顶使用持久ActionBarButton模型更新Trace状态，加载完成后恢复可点击。

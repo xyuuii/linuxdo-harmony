@@ -3,6 +3,8 @@ import { forumSession } from '../models/ForumSession';
 
 @ComponentV2
 export struct LoginPage {
+  @Param topInset: number = 0;
+  @Param bottomInset: number = 0;
   @Event onAuthenticated: () => void = (): void => {};
   @Event onBrowser: () => void = (): void => {};
   @Local emailMode: boolean = false;
@@ -134,7 +136,8 @@ export struct LoginPage {
             .fontSize(13).lineHeight(22).fontColor($r('app.color.text_secondary')).width('100%')
         }.width('100%').constraintSize({ maxWidth: 540 }).padding({ left: 24, right: 24, bottom: 40 })
       }.width('100%').height('100%').scrollBar(BarState.Off)
-    }.title('登录').backgroundColor($r('app.color.page_background'))
+    }.title('登录').padding({ top: this.topInset, bottom: this.bottomInset })
+      .backgroundColor($r('app.color.page_background'))
       .onDisAppear(() => { this.request?.cancel(); this.password = ''; this.secondFactor = ''; this.emailLink = ''; })
   }
 }

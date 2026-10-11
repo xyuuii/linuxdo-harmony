@@ -55,7 +55,7 @@ function navigationRuntime() {
     latestScroller: scrollers[0], categoriesScroller: scrollers[1],
     searchScroller: scrollers[2], profileScroller: scrollers[3],
     navigationScrollPolicy: new TopicScrollPolicy(),
-    navigationCollapsed: false, currentIndex: 0, showBrowser: false, mainPageVisible: true,
+    navigationCollapsed: false, currentIndex: 0, showBrowser: false, mainPageVisible: true, topInset: 64,
     appearance: { reduceMotion: false, highContrast: false },
     paths: { size: () => pathDepth }
   });
@@ -104,7 +104,7 @@ test('each active page collapses while reading forward and expands for reverse r
     assert.equal(navigation.navigationCollapsed, false, 'Reset must clear partial forward travel.');
     navigation.readNavigationScroll(index, 31, ScrollState.Scroll, ScrollSource.DRAG);
     assert.equal(navigation.navigationCollapsed, true);
-    scrollers[index].offset = 0;
+    scrollers[index].offset = index < 2 ? -navigation.topInset : 0;
     navigation.readNavigationScroll(index, -1, ScrollState.Scroll, ScrollSource.DRAG);
     assert.equal(navigation.navigationCollapsed, false, 'The beginning always exposes the complete navigation.');
     assert.equal(scrollers.filter(scroller => scroller.reads > 0).length, 1);
@@ -175,5 +175,30 @@ test('actual root visibility blocks hidden-page scrolling and restores expanded 
     assert.equal(navigation.navigationCollapsed, false, 'Returning from a child page reveals the entire main navigation.');
     navigation.readNavigationScroll(0, 1, ScrollState.Scroll, ScrollSource.DRAG);
     assert.equal(navigation.navigationCollapsed, false);
+  }
+});
+
+test('forward reading beyond an inset-backed start collapses even with a negative raw offset, and the true start expands', () => {
+  for (let index = 0; index < 4; index++) {
+    const { navigation, scrollers } = navigationRuntime();
+    navigation.currentIndex = index;
+    // Latest/categories use contentStartOffset=topInset. Search/profile have
+    // their header outside the scroll content and therefore start at raw zero.
+    const initialOffset = index < 2 ? -navigation.topInset : 0;
+    scrollers[index].offset = initialOffset;
+    navigation.readNavigationScroll(index, 0, ScrollState.Scroll, ScrollSource.DRAG);
+    assert.equal(navigation.navigationCollapsed, false);
+    scrollers[index].offset = initialOffset + 16;
+    navigation.readNavigationScroll(index, 16, ScrollState.Scroll, ScrollSource.DRAG);
+    assert.equal(navigation.navigationCollapsed, false);
+    scrollers[index].offset = initialOffset + 32;
+    if (index < 2) { assert.ok(scrollers[index].offset < 0); }
+    navigation.readNavigationScroll(index, 16, ScrollState.Scroll, ScrollSource.DRAG);
+    assert.equal(navigation.navigationCollapsed, true,
+      'A negative native offset after reading 32 vp is not the initial content position.');
+    scrollers[index].offset = initialOffset;
+    navigation.readNavigationScroll(index, -1, ScrollState.Scroll, ScrollSource.DRAG);
+    assert.equal(navigation.navigationCollapsed, false,
+      'The final one-vp step to the real start expands immediately, without waiting for reverse-travel hysteresis.');
   }
 });

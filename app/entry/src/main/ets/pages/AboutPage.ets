@@ -4,6 +4,8 @@ import { materialSupported } from '../services/MaterialPolicy';
 
 @ComponentV2
 export struct AboutPage {
+  @Param topInset: number = 0;
+  @Param bottomInset: number = 0;
   @Event onVerify: () => void = (): void => {};
   private openSource(): void {
     const context: common.UIAbilityContext | undefined = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -25,7 +27,7 @@ export struct AboutPage {
             }.alignItems(HorizontalAlign.Start).layoutWeight(1)
           }.width('100%')
           Column({ space: 14 }) {
-            Text('版本 0.2.1 · 本地开发版本').fontColor($r('app.color.text_primary'))
+            Text('版本 0.2.2 · 本地开发版本').fontColor($r('app.color.text_primary'))
             Text(`登录状态：${forumSession.user !== undefined ? forumSession.user.username : '未登录'}`)
               .fontSize(14).fontColor($r('app.color.text_secondary'))
             Text(`沉浸材质：${materialSupported() ? '设备支持' : '使用清晰样式'}`)
@@ -43,6 +45,7 @@ export struct AboutPage {
             .fontSize(13).lineHeight(22).fontColor($r('app.color.text_secondary')).width('100%')
         }.width('100%').padding(24).alignItems(HorizontalAlign.Start)
       }.width('100%').height('100%')
-    }.title('关于与诊断').backgroundColor($r('app.color.page_background'))
+    }.title('关于与诊断').padding({ top: this.topInset, bottom: this.bottomInset })
+      .backgroundColor($r('app.color.page_background'))
   }
 }

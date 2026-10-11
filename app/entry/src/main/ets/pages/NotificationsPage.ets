@@ -7,6 +7,8 @@ import { relativeTime } from '../services/ForumPresentation';
 
 @ComponentV2
 export struct NotificationsPage {
+  @Param topInset: number = 0;
+  @Param bottomInset: number = 0;
   @Param session: ForumSession = forumSession;
   @Event onOpenTopic: (id: number, postNumber: number) => void = (): void => {};
   @Event onLogin: () => void = (): void => {};
@@ -115,7 +117,8 @@ export struct NotificationsPage {
           }.width('100%').height('100%').scrollBar(BarState.Off)
         }.width('100%').layoutWeight(1).onRefreshing(() => { this.refreshing = true; void this.load(true); })
       }.width('100%').height('100%').padding(20)
-    }.title('通知').backgroundColor($r('app.color.page_background'))
+    }.title('通知').padding({ top: this.topInset, bottom: this.bottomInset })
+      .backgroundColor($r('app.color.page_background'))
       .onReady(() => { void this.load(true); }).onDisAppear(() => { this.request?.cancel(); })
   }
 }

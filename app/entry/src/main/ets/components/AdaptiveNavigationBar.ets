@@ -10,6 +10,7 @@ interface NavigationEntry { index: number; title: string; symbol: Resource; }
 export struct AdaptiveNavigationBar {
   @Param currentIndex: number = 0;
   @Param collapsed: boolean = false;
+  @Param bottomInset: number = 0;
   @Param appearance: AppearanceSettings = loadAppearanceSettings();
   @Event onSelect: (index: number) => void = (_index: number): void => {};
   @Event onExpand: () => void = (): void => {};
@@ -33,6 +34,11 @@ export struct AdaptiveNavigationBar {
   @Computed
   get selectedIndex(): number {
     return Number.isFinite(this.currentIndex) ? Math.max(0, Math.min(3, Math.floor(this.currentIndex))) : 0;
+  }
+
+  @Computed
+  get safeBottomInset(): number {
+    return Number.isFinite(this.bottomInset) && this.bottomInset >= 0 ? this.bottomInset : 0;
   }
 
   aboutToAppear(): void {
@@ -104,10 +110,19 @@ export struct AdaptiveNavigationBar {
 
   build() {
     Column() {
-      Blank().hitTestBehavior(HitTestMode.None)
       Row() {
         Blank().hitTestBehavior(HitTestMode.None)
         Stack({ alignContent: Alignment.TopStart }) {
+          // Keep legible blur under the optical material; the material alone may be highly transparent.
+          Row().width('100%').height('100%').borderRadius(this.frame().surfaceHeight / 2)
+            .backgroundColor(this.appearance.effectLevel === 0 || this.appearance.highContrast ?
+              $r('app.color.surface') : Color.Transparent)
+            .backgroundEffect({ radius: this.appearance.effectLevel === 0 || this.appearance.highContrast ? 0 :
+              this.appearance.effectLevel === 1 ? 16 : this.appearance.effectLevel === 2 ? 24 : 32,
+              saturation: 1.05, color: this.appearance.effectLevel === 0 || this.appearance.highContrast ?
+                Color.Transparent : $r('app.color.material_tint') })
+            .hitTestBehavior(HitTestMode.None).accessibilityLevel('no-hide-descendants')
+            .id('main_navigation_backdrop')
           ForEach(this.entries, (entry: NavigationEntry) => { this.tab(entry) },
             (entry: NavigationEntry): string => entry.index.toString())
         }.width(this.frame().surfaceWidth).height(this.frame().surfaceHeight)
@@ -117,13 +132,14 @@ export struct AdaptiveNavigationBar {
             color: this.appearance.highContrast ? $r('app.color.text_primary') : $r('app.color.divider') })
           .shadow(ShadowStyle.OUTER_DEFAULT_MD)
           .systemMaterial(this.cachedMaterial).id('main_navigation_surface')
-      }.width('100%').padding({ left: 16, right: 16, bottom: 12 })
+      }.width('100%').padding({ left: 16, right: 16, bottom: 12 + this.safeBottomInset })
         .onAreaChange((_previous: Area, current: Area): void => {
           const width: number = Number(current.width) - 32;
           if (Number.isFinite(width) && width >= 52 && Math.abs(this.availableWidth - width) > 0.5) {
             this.availableWidth = width;
           }
         })
-    }.width('100%').height('100%').hitTestBehavior(HitTestMode.Transparent)
+    }.width('100%').height('100%').justifyContent(FlexAlign.End)
+      .hitTestBehavior(HitTestMode.Transparent)
   }
 }

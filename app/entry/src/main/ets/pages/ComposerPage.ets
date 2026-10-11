@@ -34,6 +34,8 @@ function attachmentMime(name: string): string {
 
 @ComponentV2
 export struct ComposerPage {
+  @Param topInset: number = 0;
+  @Param bottomInset: number = 0;
   @Param topicId: number = 0;
   @Param replyTo: number = 0;
   @Param postId: number = 0;
@@ -376,7 +378,8 @@ export struct ComposerPage {
       }.width('100%').height('100%').padding({ left: 18, right: 18, top: 16, bottom: 14 })
         .bindSheet($$this.showEmoji, this.emojiSheet, { height: SheetSize.MEDIUM, dragBar: true,
           backgroundColor: $r('app.color.surface') })
-    }.title(this.title).backgroundColor($r('app.color.page_background')).onShown(() => { this.prepare(); })
+    }.title(this.title).padding({ top: this.topInset, bottom: this.bottomInset })
+      .backgroundColor($r('app.color.page_background')).onShown(() => { this.prepare(); })
       .onHidden(() => { if (!this.submitting) { this.saveDraft(); } })
       .onBackPressed((): boolean => this.leave())
   }

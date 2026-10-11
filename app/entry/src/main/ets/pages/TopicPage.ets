@@ -375,6 +375,8 @@ struct TopicPostCard {
 export struct TopicPage {
   @Param topicId: number = 0;
   @Param postNumber: number = 1;
+  @Param topInset: number = 0;
+  @Param bottomInset: number = 0;
   @Param appearance: AppearanceSettings = loadAppearanceSettings();
   @Param treeView: boolean = true;
   @Param session: ForumSession = forumSession;
@@ -382,6 +384,7 @@ export struct TopicPage {
     (_topicId: number, _replyTo: number, _postId: number): void => {};
   @Event onOpenTopic: (id: number, postNumber: number) => void = (_id: number, _number: number): void => {};
   @Event onLogin: () => void = (): void => {};
+  @Event onBack: () => void = (): void => {};
   @Local topic: TopicDetail | undefined = undefined;
   @Local posts: Post[] = [];
   @Local rows: TopicTreeRow[] = [];
@@ -408,6 +411,7 @@ export struct TopicPage {
   @Local pictureInitialIndex: number = 0;
   @Local toolbarExpanded: boolean = true;
   @Local readerBarWidth: number = 360;
+  @Local backTopButton: ActionBarButton | undefined = undefined;
   @Local endFeedbackProgress: number = 0;
   @Local endFeedbackVisible: boolean = false;
   private endPullDistance: number = 0;
@@ -423,6 +427,28 @@ export struct TopicPage {
   private writeRequest: RequestCancellation | undefined = undefined;
   private readonly source: TopicRowsSource = new TopicRowsSource();
   private readonly scroller: Scroller = new Scroller();
+
+  aboutToAppear(): void {
+    if (this.backTopButton === undefined) {
+      this.backTopButton = new ActionBarButton({
+        baseIcon: $r('sys.symbol.arrow_up_to_line'), id: 'topic_back_to_top', width: LengthMetrics.vp(44),
+        enabled: false, accessibilityText: '回到话题顶部', hoverTips: '回到话题顶部',
+        onClick: (): void => { this.backToTopicTop(); }
+      });
+    }
+    this.updateBackTopButton();
+  }
+
+  @Monitor('loading', 'writeBusy', 'posts', 'toolbarExpanded', 'appearance.effectLevel', 'appearance.highContrast', 'appearance.reduceMotion', 'appearance.themeMode')
+  updateBackTopButton(): void {
+    const button: ActionBarButton | undefined = this.backTopButton;
+    if (button === undefined) { return; }
+    // HDS retains the stable-ID node, so update its observed model instead of supplying a replacement.
+    button.enabled = !this.loading && !this.writeBusy && this.posts.length > 0;
+    button.buttonModifier = this.controlModifier();
+    button.iconFillColor = ColorMetrics.resourceColor($r('app.color.text_primary'));
+    button.accessibilityLevel = this.readerToolsVisible ? 'yes' : 'no-hide-descendants';
+  }
 
   @Computed
   get originalAuthor(): string { return this.posts.find((post: Post): boolean => post.postNumber === 1)?.username || ''; }
@@ -452,8 +478,7 @@ export struct TopicPage {
       const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
       void window.getLastWindow(context).then((main: window.Window): void => {
         if (this.showPicture !== visible) { return; }
-        const background: string = visible ? '#FF000000' :
-          '#' + (context.resourceManager.getColorSync($r('app.color.page_background').id) >>> 0).toString(16).padStart(8, '0');
+        const background: string = visible ? '#FF000000' : '#00000000';
         const foreground: string = visible ? '#FFFFFFFF' :
           '#' + (context.resourceManager.getColorSync($r('app.color.text_primary').id) >>> 0).toString(16).padStart(8, '0');
         void main.setWindowSystemBarProperties({ statusBarColor: background, navigationBarColor: background,
@@ -568,8 +593,10 @@ export struct TopicPage {
     const blocked: boolean = this.hidden || this.showPicture || this.showJump || this.loading || this.refreshing;
     const userDriven: boolean = source === ScrollSource.DRAG || source === ScrollSource.FLING ||
       source === ScrollSource.OTHER_USER_INPUT;
+    // contentStartOffset makes the native list's origin negative, including the overlay title.
+    const readingOffset: number = this.scroller.currentOffset().yOffset + this.topInset + 56;
     const expanded: boolean | undefined = this.scrollPolicy.update(offset, userDriven,
-      this.scroller.currentOffset().yOffset <= 1, blocked || this.appearance.reduceMotion);
+      readingOffset <= 1, blocked || this.appearance.reduceMotion);
     if (expanded !== undefined) { this.toolbarExpanded = expanded; }
     if (blocked || !this.topicEnded) { this.dismissEndFeedback(); return; }
     // Reaching the last item, programmatic jumps and spring rebound are not a new pull.
@@ -604,8 +631,8 @@ export struct TopicPage {
       this.currentNumber = 1;
       this.highlightedId = 0;
       this.pendingNumber = 0;
-      this.scroller.scrollTo({ xOffset: 0, yOffset: 0, animation: this.appearance.reduceMotion ? false :
-        { curve: curves.springMotion(0.42, 0.95) } });
+      if (this.appearance.reduceMotion) { this.scroller.scrollEdge(Edge.Top); }
+      else { this.scroller.scrollEdge(Edge.Top, { velocity: 1200 }); }
     }
   }
 
@@ -1029,8 +1056,25 @@ export struct TopicPage {
       Text(this.topic?.title || (this.loading ? '正在打开帖子…' : '话题详情')).fontSize(11)
         .fontColor($r('app.color.text_secondary')).maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis }).id('topic_title_context')
-    }.width('100%').height(56).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Start)
-      .padding({ right: 12 }).systemMaterial(materialFor(this.appearance))
+    }.layoutWeight(1).height(56).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Start)
+      .padding({ right: 12 })
+  }
+
+  @Builder
+  readerHeader() {
+    Row({ space: 8 }) {
+      Button({ type: ButtonType.Circle, buttonStyle: ButtonStyleMode.TEXTUAL }) {
+        SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(22).fontColor([$r('app.color.text_primary')])
+      }.width(48).height(48).accessibilityText('返回')
+        .id('__NavdestinationField__BackButton__Back__').onClick(this.onBack)
+      this.readerTitle()
+    }.width('100%').height(this.topInset + 56).padding({ left: 8, right: 4, top: this.topInset })
+      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP])
+      .backgroundColor(this.appearance.effectLevel === 0 || this.appearance.highContrast ?
+        $r('app.color.surface') : Color.Transparent)
+      .backgroundBlurStyle(this.appearance.effectLevel === 0 || this.appearance.highContrast ?
+        BlurStyle.NONE : BlurStyle.COMPONENT_THIN)
+      .id('topic_immersive_header').zIndex(3)
   }
 
   @Builder
@@ -1068,14 +1112,7 @@ export struct TopicPage {
           accessibilityText: `楼层导航，当前第${this.currentNumber}楼，共${this.stream.length}条内容`,
           onClick: (): void => { this.openFloorNavigation(); }
         })],
-        endButtons: [new ActionBarButton({
-          baseIcon: $r('sys.symbol.arrow_up_to_line'), id: 'topic_back_to_top',
-          width: LengthMetrics.vp(44), enabled: !this.loading && !this.writeBusy && this.posts.length > 0,
-          iconFillColor: ColorMetrics.resourceColor($r('app.color.text_primary')),
-          buttonModifier: this.controlModifier(), accessibilityText: '回到话题顶部', hoverTips: '回到话题顶部',
-          accessibilityLevel: this.readerToolsVisible ? 'yes' : 'no-hide-descendants',
-          onClick: (): void => { this.backToTopicTop(); }
-        })],
+        endButtons: this.backTopButton === undefined ? [] : [this.backTopButton],
         isExpand: this.readerToolsVisible,
         $isExpand: (expanded: boolean): void => { this.toolbarExpanded = expanded; },
         blurStrategy: BlurStrategy.DISABLE,
@@ -1120,20 +1157,19 @@ export struct TopicPage {
     NavDestination() {
       Stack({ alignContent: Alignment.TopStart }) {
       Column() {
-        if (this.error) {
-          Column({ space: 8 }) {
-            Text(this.error).fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
-            Row({ space: 10 }) {
-              Button('重试', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40)
-                .enabled(!this.loading && !this.writeBusy).onClick(() => { this.reload(this.currentNumber); })
-              Button('登录 / 完成验证', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40).onClick(this.onLogin)
-            }.width('100%')
-          }.padding(16).backgroundColor($r('app.color.selected_background')).width('100%')
-        }
         Refresh({ refreshing: $$this.refreshing }) {
           List({ scroller: this.scroller, space: 0 }) {
             ListItem() {
-              if (this.topic === undefined) {
+              if (this.error) {
+                Column({ space: 8 }) {
+                  Text(this.error).fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
+                  Row({ space: 10 }) {
+                    Button('重试', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40)
+                      .enabled(!this.loading && !this.writeBusy).onClick(() => { this.reload(this.currentNumber); })
+                    Button('登录 / 完成验证', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40).onClick(this.onLogin)
+                  }.width('100%')
+                }.padding(16).backgroundColor($r('app.color.selected_background')).width('100%')
+              } else if (this.topic === undefined) {
                 Text(this.loading ? '正在打开帖子…' : '帖子').fontSize(18).fontColor($r('app.color.text_secondary')).padding(16)
               } else { Blank().height(1) }
             }
@@ -1205,7 +1241,8 @@ export struct TopicPage {
                 } else { Blank().height(1) }
               }.width('100%')
             }
-          }.width('100%').height('100%').contentEndOffset(84).cachedCount(3)
+          }.width('100%').height('100%')
+            .contentStartOffset(this.topInset + 56).contentEndOffset(84 + this.bottomInset).cachedCount(3)
             .scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true, effectEdge: EffectEdge.END })
             .onWillScroll((offset: number, state: ScrollState, source: ScrollSource): void => {
               this.readScroll(offset, state, source);
@@ -1216,18 +1253,21 @@ export struct TopicPage {
               if (row !== undefined) { this.currentNumber = row.post.postNumber; }
             })
             .onReachEnd(() => { if (this.entered && !this.showPicture && !this.error) { this.loadSlice(false); } })
-        }.layoutWeight(1).onRefreshing(() => { this.reload(this.currentNumber); })
+        }.height('100%')
+          .layoutWeight(1).onRefreshing(() => { this.reload(this.currentNumber); })
       }.width('100%').height('100%')
       if (!this.showPicture) {
+        this.readerHeader()
         Column({ space: 10 }) {
           this.topicEndFeedback()
           this.readerToolbar()
         }.width('100%').height('100%').justifyContent(FlexAlign.End)
-          .padding({ bottom: 4 }).zIndex(2)
+          .padding({ bottom: 4 + this.bottomInset }).zIndex(2)
           .hitTestBehavior(HitTestMode.Transparent)
       }
       if (this.showPicture) {
         ForumImageViewer({ urls: this.pictureUrls, initialIndex: this.pictureInitialIndex,
+          topInset: this.topInset, bottomInset: this.bottomInset,
           ownerId: this.session.user?.id || 0, saving: this.savingPicture,
           onClose: (): void => { this.showPicture = false; },
           onSave: (url: string): void => { this.pictureUrl = url; void this.savePicture(); },
@@ -1235,8 +1275,7 @@ export struct TopicPage {
           .width('100%').height('100%').zIndex(10)
       }
       }.width('100%').height('100%')
-    }.title({ builder: this.readerTitle, height: 56 }, { backgroundColor: $r('app.color.page_background') })
-      .hideTitleBar(this.showPicture).backgroundColor($r('app.color.page_background'))
+    }.hideTitleBar(true).backgroundColor($r('app.color.surface'))
       .onBackPressed((): boolean => { if (this.showPicture) { this.showPicture = false; return true; } return false; })
       .onShown(() => {
         this.hidden = false;

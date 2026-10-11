@@ -1,5 +1,5 @@
 import { HdsNavigation, HdsTabs, HdsTabsController } from '@kit.UIDesignKit';
-import { SymbolGlyphModifier, window } from '@kit.ArkUI';
+import { SymbolGlyphModifier, window, KeyboardAvoidMode as UIKeyboardAvoidMode } from '@kit.ArkUI';
 import { webview } from '@kit.ArkWeb';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
@@ -12,6 +12,8 @@ import { allowedLoginNavigation, loginOrigin, loginPageTitle } from '../services
 import { TopicScrollPolicy } from '../services/TopicScrollPolicy';
 import { TopicFeed } from '../components/TopicFeed';
 import { AdaptiveNavigationBar } from '../components/AdaptiveNavigationBar';
+import { EdgeBackdrop } from '../components/EdgeBackdrop';
+import { topWindowInset, bottomWindowInset } from '../services/WindowEdgeInsets';
 import { CategoriesPage } from './CategoriesPage';
 import { SearchPage } from './SearchPage';
 import { ProfilePage } from './ProfilePage';
@@ -39,6 +41,7 @@ class ForumRoute {
 @Entry
 @ComponentV2
 struct Index {
+  @Env(SystemProperties.WINDOW_AVOID_AREA) windowAreas: window.UIEnvWindowAvoidAreaInfoVP;
   @Local appearance: AppearanceSettings = loadAppearanceSettings();
   @Local currentIndex: number = 0;
   @Local paths: NavPathStack = new NavPathStack();
@@ -66,6 +69,15 @@ struct Index {
   private webAttached: boolean = false;
   private initialized: boolean = false;
   private loginOwnerId: number = 0;
+
+  @Computed
+  get topInset(): number { return topWindowInset(this.windowAreas); }
+
+  @Computed
+  get bottomInset(): number { return bottomWindowInset(this.windowAreas); }
+
+  @Computed
+  get keyboardVisible(): boolean { return (this.windowAreas?.keyboard?.bottomRect?.height ?? 0) > 0; }
 
   private navigationScroller(index: number): Scroller {
     if (index === 1) { return this.categoriesScroller; }
@@ -97,7 +109,7 @@ struct Index {
     const userDriven: boolean = source === ScrollSource.DRAG || source === ScrollSource.FLING ||
       source === ScrollSource.OTHER_USER_INPUT;
     const expanded: boolean | undefined = this.navigationScrollPolicy.update(offset, userDriven,
-      this.navigationScroller(index).currentOffset().yOffset <= 1, blocked);
+      this.navigationScroller(index).currentOffset().yOffset + (index < 2 ? this.topInset : 0) <= 1, blocked);
     if (expanded !== undefined) { this.setNavigationCollapsed(!expanded); }
   }
 
@@ -116,11 +128,9 @@ struct Index {
       context.getApplicationContext().setColorMode(mode);
       // Resolve theme resources instead of fixing a light status bar in dark mode.
       void window.getLastWindow(context).then((main: window.Window): void => {
-        const background: number = context.resourceManager.getColorSync($r('app.color.page_background').id);
         const foreground: number = context.resourceManager.getColorSync($r('app.color.text_primary').id);
-        const backgroundHex: string = '#' + (background >>> 0).toString(16).padStart(8, '0');
         const foregroundHex: string = '#' + (foreground >>> 0).toString(16).padStart(8, '0');
-        void main.setWindowSystemBarProperties({ statusBarColor: backgroundHex, navigationBarColor: backgroundHex,
+        void main.setWindowSystemBarProperties({ statusBarColor: '#00000000', navigationBarColor: '#00000000',
           statusBarContentColor: foregroundHex, navigationBarContentColor: foregroundHex });
       }).catch(() => {});
     } catch {}
@@ -278,11 +288,13 @@ struct Index {
     if (name === 'topic') {
       TopicPage({ topicId: (param as ForumRoute).topicId,
         postNumber: (param as ForumRoute).postNumber,
+        topInset: this.topInset, bottomInset: this.bottomInset,
+        onBack: (): void => { this.paths.pop(); },
         appearance: this.appearance, treeView: this.appearance.treeView,
         onCompose: (topicId: number, replyTo: number, postId: number): void => { this.compose(topicId, replyTo, postId, param as ForumRoute); },
         onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); }, onLogin: (): void => { this.openLogin(); } })
     } else if (name === 'composer') {
-      ComposerPage({ topicId: (param as ForumRoute).topicId, replyTo: (param as ForumRoute).replyTo,
+      ComposerPage({ topInset: this.topInset, bottomInset: this.bottomInset, topicId: (param as ForumRoute).topicId, replyTo: (param as ForumRoute).replyTo,
         postId: (param as ForumRoute).postId, appearance: this.appearance,
         onSubmitted: (number: number): void => {
           const route: ForumRoute = param as ForumRoute;
@@ -293,29 +305,31 @@ struct Index {
       NavDestination() {
         TopicFeed({ title: (param as ForumRoute).categoryName, categoryId: (param as ForumRoute).categoryId,
           categorySlug: (param as ForumRoute).categorySlug, appearance: this.appearance,
+          bottomInset: this.bottomInset,
           reloadSignal: this.dataVersion + forumSession.revision,
           onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); }, onVerify: (): void => { this.openBrowser(); } })
-      }.title((param as ForumRoute).categoryName).backgroundColor($r('app.color.page_background'))
+      }.title((param as ForumRoute).categoryName).padding({ top: this.topInset }).backgroundColor($r('app.color.page_background'))
     } else if (name === 'notifications') {
-      NotificationsPage({ onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); }, onLogin: (): void => { this.openLogin(); } })
+      NotificationsPage({ topInset: this.topInset, bottomInset: this.bottomInset, onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); }, onLogin: (): void => { this.openLogin(); } })
     } else if (name === 'profile') {
-      ProfileSectionPage({ section: (param as ForumRoute).section,
+      ProfileSectionPage({ topInset: this.topInset, bottomInset: this.bottomInset, section: (param as ForumRoute).section,
         onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); }, onLogin: (): void => { this.openLogin(); } })
     } else if (name === 'settings') {
-      NavDestination() { AppearancePage({ appearance: this.appearance }) }.title('设置').backgroundColor($r('app.color.page_background'))
+      NavDestination() { AppearancePage({ appearance: this.appearance }) }.title('设置').padding({ top: this.topInset, bottom: this.bottomInset }).backgroundColor($r('app.color.page_background'))
     } else if (name === 'login') {
-      LoginPage({ onAuthenticated: (): void => { this.authenticated(); }, onBrowser: (): void => { this.openBrowser(); } })
+      LoginPage({ topInset: this.topInset, bottomInset: this.bottomInset, onAuthenticated: (): void => { this.authenticated(); }, onBrowser: (): void => { this.openBrowser(); } })
     } else if (name === 'about') {
-      AboutPage({ onVerify: (): void => { this.openBrowser(); } })
+      AboutPage({ topInset: this.topInset, bottomInset: this.bottomInset, onVerify: (): void => { this.openBrowser(); } })
     }
   }
 
   build() {
-    Stack() {
+    Stack({ alignContent: Alignment.TopStart }) {
       HdsNavigation(this.paths) {
         HdsTabs({ controller: this.controller, index: this.currentIndex }) {
           TabContent() {
             TopicFeed({ appearance: this.appearance, reloadSignal: this.dataVersion + forumSession.revision,
+              topInset: this.topInset, bottomInset: this.bottomInset, immersiveTop: true,
               listScroller: this.latestScroller,
               onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
                 this.readNavigationScroll(0, offset, state, source);
@@ -323,25 +337,31 @@ struct Index {
               active: this.currentIndex === 0 && !this.showBrowser && this.paths.size() === 0,
               onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); },
               onVerify: (): void => { this.openBrowser(); }, onNotifications: (): void => { this.openNotifications(); } })
-          }.tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.house')) }, '最新'))
+          }.height('100%')
+            .tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.house')) }, '最新'))
           TabContent() {
             CategoriesPage({ reloadSignal: this.dataVersion + forumSession.revision,
+              topInset: this.topInset, bottomInset: this.bottomInset,
               listScroller: this.categoriesScroller,
               onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
                 this.readNavigationScroll(1, offset, state, source);
               },
               onOpenCategory: (category: Category): void => { this.openCategory(category); }, onVerify: (): void => { this.openBrowser(); } })
-          }.tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.square_grid_2x2')) }, '分类'))
+          }.height('100%')
+            .tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.square_grid_2x2')) }, '分类'))
           TabContent() {
             SearchPage({ reloadSignal: this.dataVersion + forumSession.revision,
+              topInset: this.topInset, bottomInset: this.bottomInset,
               listScroller: this.searchScroller,
               onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
                 this.readNavigationScroll(2, offset, state, source);
               },
               onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); }, onVerify: (): void => { this.openBrowser(); } })
-          }.tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.magnifyingglass')) }, '搜索'))
+          }.height('100%')
+            .tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.magnifyingglass')) }, '搜索'))
           TabContent() {
             ProfilePage({ listScroller: this.profileScroller,
+              topInset: this.topInset, bottomInset: this.bottomInset,
               onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
                 this.readNavigationScroll(3, offset, state, source);
               },
@@ -349,24 +369,37 @@ struct Index {
               onSettings: (): void => { this.resetNavigation(); this.pushRoute('settings', new ForumRoute()); },
               onDiagnostics: (): void => { this.resetNavigation(); this.pushRoute('about', new ForumRoute()); },
               onLoggedOut: (): void => { this.paths.clear(); this.dataVersion++; } })
-          }.tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.person')) }, '我的'))
-        }.width('100%').height('100%').barPosition(BarPosition.End).barOverlap(true).vertical(false).barHeight(0)
+          }.height('100%')
+            .tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.person')) }, '我的'))
+        }.width('100%').height('100%')
+          .barPosition(BarPosition.End).barOverlap(true).vertical(false).barHeight(0)
           .barBackgroundBlurStyle(BlurStyle.NONE).barBackgroundColor(Color.Transparent)
           .animationDuration(this.appearance.reduceMotion ? 0 : 240).onChange((index: number) => {
             this.currentIndex = index;
             this.resetNavigation();
           })
-      }.width('100%').height('100%').mode(NavigationMode.Stack).hideTitleBar(true).hideToolBar(true)
+      }.width('100%').height('100%')
+        .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+        .mode(NavigationMode.Stack).hideTitleBar(true).hideToolBar(true)
         .navDestination(this.destination).backgroundColor($r('app.color.page_background'))
         .onNavBarStateChange((visible: boolean): void => { this.rootVisibilityChanged(visible); })
 
+      EdgeBackdrop({ heightVp: this.topInset, appearance: this.appearance,
+        visible: this.mainPageVisible && !this.showBrowser })
+        .width('100%').height(this.topInset).position({ x: 0, y: 0 })
+        .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP])
+        .hitTestBehavior(HitTestMode.None).accessibilityLevel('no-hide-descendants').zIndex(1)
+
       AdaptiveNavigationBar({ currentIndex: this.currentIndex, collapsed: this.navigationCollapsed,
         appearance: this.appearance,
+        bottomInset: this.bottomInset,
         onSelect: (index: number): void => {
           this.resetNavigation(); this.currentIndex = index; this.controller.changeIndex(index);
         },
         onExpand: (): void => { this.resetNavigation(); } })
-        .visibility(this.mainPageVisible && !this.showBrowser ? Visibility.Visible : Visibility.Hidden)
+        .visibility(this.mainPageVisible && !this.showBrowser && !this.keyboardVisible ? Visibility.Visible : Visibility.Hidden)
+        .height('100%')
+        .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
         .hitTestBehavior(HitTestMode.Transparent).zIndex(2)
 
       Column({ space: 8 }) {
@@ -408,13 +441,18 @@ struct Index {
           .height(48).width('92%').margin({ bottom: 12 }).enabled(!this.browserBusy)
           .backgroundColor($r('app.color.accent')).fontColor($r('app.color.on_accent')).onClick(() => { void this.finishBrowser(); })
       }.width('100%').height('100%').backgroundColor($r('app.color.page_background'))
+        .padding({ top: this.topInset })
         .visibility(this.showBrowser ? Visibility.Visible : Visibility.Hidden).zIndex(this.showBrowser ? 10 : -1)
-    }.width('100%').height('100%').backgroundColor($r('app.color.page_background'))
+    }.width('100%').height('100%')
+      .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
+      .id('app_window')
+      .backgroundColor($r('app.color.page_background'))
       .bindSheet(this.showAuthPopup, this.authenticationWindow, {
         height: SheetSize.LARGE, showClose: false, dragBar: true,
         onDisappear: (): void => { this.closeAuthPopup(); }
       })
       .onAppear(() => {
+        this.getUIContext().setKeyboardAvoidMode(UIKeyboardAvoidMode.RESIZE);
         this.applyTheme();
         if (!this.initialized) { this.initialized = true; void forumSession.refresh(); }
         forumSession.startPolling();
