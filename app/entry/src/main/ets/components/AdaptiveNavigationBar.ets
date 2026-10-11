@@ -1,6 +1,6 @@
 import { curves, uiMaterial } from '@kit.ArkUI';
 import { AppearanceSettings, loadAppearanceSettings } from '../models/AppearanceSettings';
-import { materialFor } from '../services/MaterialPolicy';
+import { ReaderGlassSurface } from './ReaderGlassSurface';
 import { navigationMorphFrame, NavigationMorphFrame } from '../services/NavigationMorphGeometry';
 
 interface NavigationEntry { index: number; title: string; symbol: Resource; }
@@ -16,8 +16,6 @@ export struct AdaptiveNavigationBar {
   @Event onExpand: () => void = (): void => {};
   @Local progress: number = 0;
   @Local availableWidth: number = 328;
-  @Local cachedMaterial: uiMaterial.Material = uiMaterial.Material.empty;
-  @Local hasMaterial: boolean = false;
   private live: boolean = false;
   private readonly entries: NavigationEntry[] = [
     { index: 0, title: '最新', symbol: $r('sys.symbol.house') },
@@ -43,7 +41,6 @@ export struct AdaptiveNavigationBar {
 
   aboutToAppear(): void {
     this.live = true;
-    this.updateMaterial();
     this.progress = this.shouldCollapse ? 1 : 0;
   }
 
@@ -60,14 +57,6 @@ export struct AdaptiveNavigationBar {
     this.getUIContext().animateTo({ curve: curves.springMotion(0.38, 0.95) }, (): void => {
       this.progress = target;
     });
-  }
-
-  @Monitor('appearance.effectLevel', 'appearance.highContrast', 'appearance.reduceMotion', 'appearance.themeMode')
-  materialChanged(): void { this.updateMaterial(); }
-
-  private updateMaterial(): void {
-    this.cachedMaterial = materialFor(this.appearance);
-    this.hasMaterial = this.cachedMaterial instanceof uiMaterial.ImmersiveMaterial;
   }
 
   private frame(index: number = 0): NavigationMorphFrame {
@@ -98,7 +87,7 @@ export struct AdaptiveNavigationBar {
     }.width(this.frame(entry.index).buttonWidth).height(this.frame(entry.index).surfaceHeight)
       .position({ x: this.frame(entry.index).buttonLeft, y: 0 })
       .padding(0).borderRadius(this.frame(entry.index).surfaceHeight / 2)
-      .backgroundColor(Color.Transparent).stateEffect(true)
+      .backgroundColor(Color.Transparent).stateEffect(false).systemMaterial(uiMaterial.Material.empty)
       .opacity(entry.index === this.selectedIndex ? 1 : this.frame(entry.index).labelOpacity)
       .enabled(!this.shouldCollapse || entry.index === this.selectedIndex)
       .accessibilityLevel(this.shouldCollapse && entry.index !== this.selectedIndex ? 'no-hide-descendants' : 'yes')
@@ -108,30 +97,19 @@ export struct AdaptiveNavigationBar {
       .onClick((): void => { this.activate(entry.index); })
   }
 
+  @LocalBuilder
+  navigationButtons() {
+    ForEach(this.entries, (entry: NavigationEntry) => { this.tab(entry) },
+      (entry: NavigationEntry): string => entry.index.toString())
+  }
+
   build() {
     Column() {
       Row() {
         Blank().hitTestBehavior(HitTestMode.None)
-        Stack({ alignContent: Alignment.TopStart }) {
-          // Keep legible blur under the optical material; the material alone may be highly transparent.
-          Row().width('100%').height('100%').borderRadius(this.frame().surfaceHeight / 2)
-            .backgroundColor(this.appearance.effectLevel === 0 || this.appearance.highContrast ?
-              $r('app.color.surface') : Color.Transparent)
-            .backgroundEffect({ radius: this.appearance.effectLevel === 0 || this.appearance.highContrast ? 0 :
-              this.appearance.effectLevel === 1 ? 16 : this.appearance.effectLevel === 2 ? 24 : 32,
-              saturation: 1.05, color: this.appearance.effectLevel === 0 || this.appearance.highContrast ?
-                Color.Transparent : $r('app.color.material_tint') })
-            .hitTestBehavior(HitTestMode.None).accessibilityLevel('no-hide-descendants')
-            .id('main_navigation_backdrop')
-          ForEach(this.entries, (entry: NavigationEntry) => { this.tab(entry) },
-            (entry: NavigationEntry): string => entry.index.toString())
-        }.width(this.frame().surfaceWidth).height(this.frame().surfaceHeight)
-          .borderRadius(this.frame().surfaceHeight / 2)
-          .backgroundColor(this.hasMaterial ? Color.Transparent : $r('app.color.surface'))
-          .border({ width: this.appearance.highContrast ? 1 : 0.6,
-            color: this.appearance.highContrast ? $r('app.color.text_primary') : $r('app.color.divider') })
-          .shadow(ShadowStyle.OUTER_DEFAULT_MD)
-          .systemMaterial(this.cachedMaterial).id('main_navigation_surface')
+        ReaderGlassSurface({ appearance: this.appearance, content: this.navigationButtons,
+          radiusVp: this.frame().surfaceHeight / 2, lightId: 'main_navigation_touch_light' })
+          .width(this.frame().surfaceWidth).height(this.frame().surfaceHeight).id('main_navigation_surface')
       }.width('100%').padding({ left: 16, right: 16, bottom: 12 + this.safeBottomInset })
         .onAreaChange((_previous: Area, current: Area): void => {
           const width: number = Number(current.width) - 32;

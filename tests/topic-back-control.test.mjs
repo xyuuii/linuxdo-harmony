@@ -54,6 +54,7 @@ function runtime() {
   }
   class ButtonModifier {
     backgroundColor(value) { this.background = value; return this; }
+    stateEffect(value) { this.pressState = value; return this; }
     systemMaterial(value) { this.material = value; return this; }
   }
   class Scroller {

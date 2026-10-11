@@ -9,7 +9,7 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 基于 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的真实功能与 Discourse 接口，以 ArkTS / ArkUI V2 重构的鸿蒙原生客户端。固定参考提交 `e31fe8e3a06a5de2e9c013925dd1c40a7743d30e`，源代码版本 1.1.1。
 
-本地应用版本 `0.2.5`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
+本地应用版本 `0.2.6`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
 
 0.1.1 收紧首页、分类和搜索的信息密度：话题标题最多两行，缩小卡片留白；分类等级与名称同排。分类详情移除了重复标题和不适用的底部页签预留，列表用满可用高度。首页和搜索仅在滚动末端为浮动页签留空间。
 
@@ -24,6 +24,8 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 0.2.4 为帖子底部的写回复与阅读操作增加独立毛玻璃背板，按效果等级提供真实背景模糊、主题染色、静态高光边缘和柔和阴影。按钮禁用或减少动态时仍保留可见背板；普通收起状态变为与原生主按钮圆心重合的52vp玻璃圆，原HdsActionBar宽度和动作保留。
 
 0.2.5 按官方沉浸光感指南将阅读控件合并到单一材质容器，移除手绘渐变高光与子按钮的重复材质、阴影。真机沿用系统材质自带的模糊、边缘和阴影；当前API26模拟器报告支持但不绘制光学材质，使用均匀背景模糊与轻外阴影后备，避免出现内部灰带或完全透明。展开、收起、楼层、回顶及半屏回复已在模拟器验证。
+
+0.2.6 将底栏触点流光与普通阴影分开。主导航与阅读工具共用一层材质容器，支持设备启用官方lightEffect，原生路径移除遮挡材质的后备模糊层；模拟器和不支持设备以真实触摸坐标驱动后备高光。光效跟随同一次按压跨按钮移动，松手或取消时消失；减少动态关闭弹性与转场，保留直接跟手高光，轻柔/关闭/高对比不启用光效。
 
 首页、分类、搜索和我的使用 AdaptiveNavigationBar 主导航：向下浏览时，同一个材质胶囊连续收拢为右下当前页图标按钮；反向滚动或点击按钮连续展开为四个页签。表面与图标节点保持，文字随收拢渐隐，列表阅读位置保持。开启减少动态效果或高对比时，主导航保持展开。
 
@@ -72,7 +74,7 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 | 标准 | `REGULAR`、系统阴影、触摸光感 |
 | 丰富 | `THIN`、系统阴影、形变及触摸光感 |
 
-高对比覆盖材质选择。减少动态关闭控件形变/触摸光效及页签切换动画，并让主导航静态展开，不宣称停止帖子 GIF。设备不支持时使用实色界面。设备本身的 `getGlobalMaterialLevel()` 不可修改，本应用不会改变它。
+高对比覆盖材质选择。减少动态关闭控件形变及页签切换动画，并让主导航静态展开；标准/丰富等级保留直接随触点移动的高光，不加入自主循环动画，不宣称停止帖子 GIF。底栏在模拟器及不支持材质的设备上采用模糊与跟手高光后备，其他控件仍按原有能力回退。设备本身的 `getGlobalMaterialLevel()` 不可修改，本应用不会改变它。
 
 启动时先获取主窗口并等待 `setWindowLayoutFullScreen(true)` 完成，再加载页面；任一步失败仍按默认布局继续加载，窗口布局失败只记录安全错误码。Index 通过 `@Env(SystemProperties.WINDOW_AVOID_AREA)` 获取以 vp 表示的动态避让信息：顶部取状态栏与挖孔高度的最大值，底部取手势指示条、系统栏与挖孔高度的最大值，不相加，也不把键盘高度计入系统栏避让。
 

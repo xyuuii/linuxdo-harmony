@@ -653,7 +653,7 @@ export struct TopicPage {
   }
 
   private controlModifier(): ButtonModifier {
-    return new ButtonModifier().backgroundColor(Color.Transparent)
+    return new ButtonModifier().backgroundColor(Color.Transparent).stateEffect(false)
       .systemMaterial(uiMaterial.Material.empty);
   }
 
@@ -1096,7 +1096,7 @@ export struct TopicPage {
           .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.text_primary'))
       }.width('100%').justifyContent(FlexAlign.Start).padding({ left: 14, right: 10 })
     }.height(52).width('100%').clip(true).id('topic_reply_entry')
-      .backgroundColor(Color.Transparent).systemMaterial(uiMaterial.Material.empty)
+      .backgroundColor(Color.Transparent).stateEffect(false).systemMaterial(uiMaterial.Material.empty)
       .enabled(this.replyEnabled && this.readerToolsVisible).accessibilityText(this.replyLabel)
       .hitTestBehavior(this.readerToolsVisible ? HitTestMode.Default : HitTestMode.None)
       .accessibilityLevel(this.readerToolsVisible ? 'yes' : 'no-hide-descendants')

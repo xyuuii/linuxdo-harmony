@@ -62,7 +62,7 @@ export struct AppearancePage {
           Row({ space: 16 }) {
             Column({ space: 6 }) {
               Text('减少动态效果').fontSize(17).fontColor($r('app.color.text_primary'))
-              Text('减弱交互形变与光效，关闭切换动画。')
+              Text('减少弹性形变和切换动画，保留跟随触点的高光。')
                 .fontSize(13).lineHeight(20).fontColor($r('app.color.text_secondary'))
             }.layoutWeight(1).alignItems(HorizontalAlign.Start)
             Toggle({ type: ToggleType.Switch, isOn: this.appearance.reduceMotion })

@@ -46,7 +46,8 @@ export function materialFor(settings: AppearanceSettings): uiMaterial.Material {
         materialColor: $r('app.color.material_tint'),
         applyShadow: true,
         interactive: false,
-        lightEffect: settings.reduceMotion ? null : { color: Color.White }
+        // Direct touch illumination stays usable when transition/elastic motion is reduced.
+        lightEffect: {}
       });
     }
 
@@ -55,7 +56,7 @@ export function materialFor(settings: AppearanceSettings): uiMaterial.Material {
       materialColor: $r('app.color.material_tint'),
       applyShadow: true,
       interactive: !settings.reduceMotion,
-      lightEffect: settings.reduceMotion ? null : { color: Color.White }
+      lightEffect: {}
     });
   } catch {
     return uiMaterial.Material.empty;

@@ -1,5 +1,8 @@
 {
   "color": [
+    { "name": "touch_light_core", "value": "#F0FFFFFF" },
+    { "name": "touch_light_halo", "value": "#80DDEEFF" },
+    { "name": "touch_light_fade", "value": "#00DDEEFF" },
     {
       "name": "start_window_background",
       "value": "#F4F5F8"

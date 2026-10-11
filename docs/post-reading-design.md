@@ -1,4 +1,4 @@
-# 帖子阅读交互（0.2.5）
+# 帖子阅读交互（0.2.6）
 
 0.2.1参考实际手机上的酷安鸿蒙版7.1.1（com.coolapk.hmclient）：通过HDC观察用户Pura X View / HarmonyOS 7 / API 26的真实界面，采用顶部作者信息、自然铺开的正文与底部左侧评论入口、右侧常用动作组。酷安向下长滑时隐藏整条导航、反向滚动复原；本项目结合用户要求保留单按钮收起形态。参考截图只留在本机被忽略的artifacts目录，未复制酷安源码、图标或媒体资源。
 
@@ -74,3 +74,14 @@ ReaderGlassSurface改为包含真实控件的材质容器，用无参LocalBuilde
 当前API26模拟器productModel为emulator，支持查询为true且报告EXQUISITE，但实测只设置systemMaterial时没有可见材质。对此模拟器以及不支持材质的设备使用互斥后备：单层backgroundEffect，主题tint、细边缘和radius6px/offsetY2px的外阴影，fill:false；轻柔、关闭和高对比不加装饰阴影。不强行改变系统材质等级，也不把模拟器后备称为真机光学效果。
 
 HdsActionBar保持168/104vp定宽与76vp外框高度；父材质面展开高60vp、收起为52vp圆形。外框高度显式保留，防止窄父容器令原生margin把图标向下推。收起面与主按钮设备实测均为[815,2424,997,2606]。真机光感仍需物理设备复验。
+
+
+## 0.2.6 触点流光
+
+官方[沉浸光感示例4](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-immersive-light-sense)与[开发者问答](https://developer.huawei.com/consumer/cn/forum/topic/0201220291481156105)将手指跟随效果对应到ImmersiveOptions.lightEffect。lightEffect有效对象启用流光，interactive只控制弹性形变；固定点光源和pressShadow不替代触点跟随。
+
+主导航现在复用ReaderGlassSurface，四个稳定key的真实Button仍由原AdaptiveNavigationBar拥有，无参LocalBuilder保持状态归属。原生路径只有材质容器，不再始终覆盖后备模糊Row；材质只在外观变化时更新缓存，收放与触摸不会持续重建原生材质。子按钮透明、空材质且关闭固定按压色块，标准与丰富使用lightEffect:{}；减少动态只关闭形变与转场，保留直接跟手高光，轻柔、关闭、高对比关闭流光。
+
+模拟器或不支持原生材质时，TouchLightState从同一父容器收到Down/Move/Up/Cancel：用windowX/Y减同窗口vp的Area.globalPosition，锁定首指，连续更新局部触点；第二指不抢光，抬起主指、取消、失效坐标、禁用与几何改变会清空。此为后备视觉，不冒充原生光学渲染。静态毛玻璃背板与裁剪光层分开，投影只在静态背板上，透明渐变末端保留光色RGB，避免生成随触点移动的暗圈。高光位于文字/图标下方，光层HitTest.None，无点击转发、PanGesture或stopPropagation。
+
+依据[官方触摸测试控制](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/ts-universal-attributes-hit-test-behavior)，仅胶囊区域使用BLOCK_HIERARCHY，使子按钮和材质父容器响应，阻止下方内容参与长按拖拽；满屏定位容器仍Transparent，正文可正常滑动。触点状态8项与材质策略5项生产方法fixture新增，共115项；设备观察见acceptance.md。
