@@ -375,6 +375,7 @@ struct TopicPostCard {
 export struct TopicPage {
   @Param topicId: number = 0;
   @Param postNumber: number = 1;
+  @Param reloadSignal: number = 0;
   @Param topInset: number = 0;
   @Param bottomInset: number = 0;
   @Param appearance: AppearanceSettings = loadAppearanceSettings();
@@ -422,6 +423,7 @@ export struct TopicPage {
   private generation: number = 0;
   private entered: boolean = false;
   private lastInputNumber: number = 1;
+  private handledReloadSignal: number = 0;
   private hidden: boolean = false;
   private topicOwnerId: number = 0;
   private writeRequest: RequestCancellation | undefined = undefined;
@@ -490,11 +492,17 @@ export struct TopicPage {
   @Monitor('treeView')
   treeViewChanged(): void { this.rebuild(); }
 
-  @Monitor('postNumber')
+  @Monitor('postNumber', 'reloadSignal', 'loading', 'writeBusy')
   targetNumberChanged(): void {
     if (this.entered && !this.hidden) {
+      if (this.loading || this.writeBusy) { return; }
+      const refresh: boolean = this.reloadSignal !== this.handledReloadSignal;
+      if (!refresh && this.postNumber === this.lastInputNumber) { return; }
       this.lastInputNumber = this.postNumber;
-      this.jump(this.postNumber);
+      if (refresh) {
+        this.handledReloadSignal = this.reloadSignal;
+        void this.reload(this.postNumber);
+      } else { this.jump(this.postNumber); }
     }
   }
 
@@ -1280,8 +1288,10 @@ export struct TopicPage {
       .onShown(() => {
         this.hidden = false;
         this.loading = false;
-        const number: number = !this.entered || this.postNumber !== this.lastInputNumber ? this.postNumber : this.currentNumber;
+        const number: number = !this.entered || this.postNumber !== this.lastInputNumber ||
+          this.reloadSignal !== this.handledReloadSignal ? this.postNumber : this.currentNumber;
         this.lastInputNumber = this.postNumber;
+        this.handledReloadSignal = this.reloadSignal;
         this.entered = true;
         this.reload(number);
       })

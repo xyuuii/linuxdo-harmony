@@ -29,6 +29,7 @@ import { AboutPage } from './AboutPage';
 class ForumRoute {
   topicId: number = 0;
   @Trace postNumber: number = 1;
+  @Trace replyRevision: number = 0;
   replyTo: number = 0;
   postId: number = 0;
   categoryId: number = 0;
@@ -47,6 +48,10 @@ struct Index {
   @Local paths: NavPathStack = new NavPathStack();
   @Local dataVersion: number = 0;
   @Local showBrowser: boolean = false;
+  @Local showComposer: boolean = false;
+  @Local composerRoute: ForumRoute | undefined = undefined;
+  @Local composerDismissSignal: number = 0;
+  @Local composerDismissAllowed: boolean = true;
   @Local browserBusy: boolean = false;
   @Local browserError: string = '';
   @Local browserOrigin: string = 'https://linux.do';
@@ -154,7 +159,57 @@ struct Index {
     const route: ForumRoute = new ForumRoute();
     route.topicId = topicId; route.replyTo = replyTo; route.postId = postId;
     route.returnTopic = returnTopic;
-    this.pushRoute('composer', route);
+    if (this.composerRoute !== undefined) { return; }
+    this.composerRoute = route;
+    this.setComposerKeyboardMode(true);
+    this.composerDismissSignal = 0;
+    this.composerDismissAllowed = true;
+    this.showComposer = true;
+  }
+
+  private setComposerKeyboardMode(active: boolean): void {
+    try {
+      // The native sheet handles its own keyboard; avoid applying the page RESIZE policy a second time.
+      this.getUIContext().setKeyboardAvoidMode(active ? UIKeyboardAvoidMode.OFFSET : UIKeyboardAvoidMode.RESIZE);
+    } catch {}
+  }
+
+  private requestComposerDismiss(): void {
+    if (!this.showComposer) { return; }
+    if (!this.composerDismissAllowed) {
+      this.getUIContext().getPromptAction().showToast({ message: '请先完成提交或附件选择' });
+      return;
+    }
+    // The editor owns dirty-draft confirmation and the picking/submitting guard.
+    this.composerDismissSignal++;
+  }
+
+  private closeComposer(): void { this.showComposer = false; }
+
+  private composerDisappeared(): void {
+    this.showComposer = false;
+    this.composerRoute = undefined;
+    this.setComposerKeyboardMode(false);
+    this.composerDismissAllowed = true;
+    this.composerDismissSignal = 0;
+  }
+
+  private composerSubmitted(number: number): void {
+    const topic: ForumRoute | undefined = this.composerRoute?.returnTopic;
+    if (topic !== undefined) { topic.postNumber = number; topic.replyRevision++; }
+  }
+
+  @Builder
+  replyEditor() {
+    if (this.composerRoute !== undefined) {
+      ComposerPage({ presentedAsSheet: true, dismissSignal: this.composerDismissSignal,
+        bottomInset: this.keyboardVisible ? 0 : this.bottomInset,
+        topicId: this.composerRoute.topicId, replyTo: this.composerRoute.replyTo, postId: this.composerRoute.postId,
+        appearance: this.appearance,
+        onDismissAllowedChange: (allowed: boolean): void => { this.composerDismissAllowed = allowed; },
+        onSubmitted: (number: number): void => { this.composerSubmitted(number); },
+        onDone: (): void => { this.closeComposer(); } })
+    }
   }
 
   private openLogin(): void {
@@ -287,7 +342,7 @@ struct Index {
   destination(name: string, param: Object) {
     if (name === 'topic') {
       TopicPage({ topicId: (param as ForumRoute).topicId,
-        postNumber: (param as ForumRoute).postNumber,
+        postNumber: (param as ForumRoute).postNumber, reloadSignal: (param as ForumRoute).replyRevision,
         topInset: this.topInset, bottomInset: this.bottomInset,
         onBack: (): void => { this.paths.pop(); },
         appearance: this.appearance, treeView: this.appearance.treeView,
@@ -383,6 +438,15 @@ struct Index {
         .mode(NavigationMode.Stack).hideTitleBar(true).hideToolBar(true)
         .navDestination(this.destination).backgroundColor($r('app.color.page_background'))
         .onNavBarStateChange((visible: boolean): void => { this.rootVisibilityChanged(visible); })
+        .bindSheet(this.showComposer, this.replyEditor, {
+          detents: ['50%', '85%'], detentSelection: this.keyboardVisible ? '85%' : '50%',
+          preferType: SheetType.BOTTOM, dragBar: true, showClose: false,
+          enableOutsideInteractive: false, backgroundColor: $r('app.color.surface'),
+          blurStyle: this.appearance.effectLevel === 0 || this.appearance.highContrast ? BlurStyle.NONE : BlurStyle.COMPONENT_THIN,
+          keyboardAvoidMode: SheetKeyboardAvoidMode.RESIZE_ONLY,
+          onWillDismiss: (_action: DismissSheetAction): void => { this.requestComposerDismiss(); },
+          onDisappear: (): void => { this.composerDisappeared(); }
+        })
 
       EdgeBackdrop({ heightVp: this.topInset, appearance: this.appearance,
         visible: this.mainPageVisible && !this.showBrowser })

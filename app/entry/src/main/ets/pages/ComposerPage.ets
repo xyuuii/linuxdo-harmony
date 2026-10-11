@@ -9,6 +9,14 @@ import { forumApi, RequestCancellation } from '../services/ForumApi';
 import { materialFor } from '../services/MaterialPolicy';
 
 interface DraftAttachment { id: string; uri: string; name: string; mime: string; size: number; }
+interface ComposerTool {
+  symbol: Resource;
+  label: string;
+  id: string;
+  enabled: boolean;
+  selected: boolean;
+  action: () => void;
+}
 
 const ATTACHMENT_CAP: number = 4 * 1024 * 1024;
 const ALLOWED_EXTENSIONS: string[] = [
@@ -36,6 +44,8 @@ function attachmentMime(name: string): string {
 export struct ComposerPage {
   @Param topInset: number = 0;
   @Param bottomInset: number = 0;
+  @Param presentedAsSheet: boolean = false;
+  @Param dismissSignal: number = 0;
   @Param topicId: number = 0;
   @Param replyTo: number = 0;
   @Param postId: number = 0;
@@ -43,6 +53,7 @@ export struct ComposerPage {
   @Param session: ForumSession = forumSession;
   @Event onDone: () => void = (): void => {};
   @Event onSubmitted: (postNumber: number) => void = (_number: number): void => {};
+  @Event onDismissAllowedChange: (allowed: boolean) => void = (_allowed: boolean): void => {};
   @Local draft: string = '';
   @Local initialRaw: string = '';
   @Local topicTitle: string = '';
@@ -61,7 +72,54 @@ export struct ComposerPage {
   private saveTimer: number = -1;
   private prepareGeneration: number = 0;
   private writeRequest: RequestCancellation | undefined = undefined;
+  private presentationActive: boolean = false;
+  private submissionSucceeded: boolean = false;
+  private discardedDraft: boolean = false;
+  private draftLoaded: boolean = false;
+  private textAreaController: TextAreaController | undefined = undefined;
   private readonly emojis: string[] = ['😀', '😄', '😊', '👍', '❤️', '🎉', '🤝', '🤔', '🙏', '🚀', '✅', '💡'];
+
+  aboutToAppear(): void {
+    if (this.textAreaController === undefined) { this.textAreaController = new TextAreaController(); }
+  }
+
+  @Monitor('dismissSignal')
+  dismissRequested(): void {
+    if (this.presentedAsSheet && this.presentationActive && this.dismissSignal > 0) { this.requestClose(); }
+  }
+
+  @Monitor('picking', 'submitting')
+  notifyDismissAvailability(): void {
+    if (this.presentationActive) { this.onDismissAllowedChange(!this.picking && !this.submitting); }
+  }
+
+  private presentationShown(): void {
+    this.presentationActive = true;
+    if (!this.initialized) { this.submissionSucceeded = false; this.discardedDraft = false; }
+    this.notifyDismissAvailability();
+    void this.prepare();
+  }
+
+  private presentationHidden(): void {
+    this.presentationActive = false;
+    if (!this.submitting && !this.submissionSucceeded && !this.discardedDraft) { void this.saveDraft(); }
+    if (!this.presentedAsSheet) { return; }
+    if (this.saveTimer >= 0) { clearTimeout(this.saveTimer); this.saveTimer = -1; }
+    if (!this.submissionSucceeded) {
+      this.prepareGeneration++;
+      this.writeRequest?.cancel();
+      this.writeRequest = undefined;
+    }
+    this.initialized = false;
+    this.loading = false;
+    this.permitted = false;
+    this.showEmoji = false;
+    this.draftLoaded = false;
+  }
+
+  private requestClose(): void {
+    if (!this.leave()) { this.onDone(); }
+  }
 
   @Monitor('session.revision')
   accountChanged(): void {
@@ -71,6 +129,7 @@ export struct ComposerPage {
       this.loading = false;
       if (this.saveTimer >= 0) { clearTimeout(this.saveTimer); this.saveTimer = -1; }
       this.saveDraft();
+      this.draftLoaded = false;
       this.draftKey = '';
       this.store = undefined;
       this.draft = '';
@@ -102,8 +161,11 @@ export struct ComposerPage {
     try {
       const userId: number = this.session.user?.id || 0;
       if (userId <= 0) { throw new Error('请登录后再回复或编辑。'); }
+      const key: string = `draft_${userId}_${this.topicId}_${this.replyTo}_${this.postId}`;
+      const alreadyLoaded: boolean = this.draftLoaded && this.ownerId === userId && this.draftKey === key;
+      if (!alreadyLoaded) { this.draftLoaded = false; }
       this.ownerId = userId;
-      this.draftKey = `draft_${userId}_${this.topicId}_${this.replyTo}_${this.postId}`;
+      this.draftKey = key;
       const topic: TopicDetail = await forumApi.fetchTopic(this.topicId, this.replyTo || 1);
       if (request !== this.prepareGeneration || this.session.user?.id !== this.ownerId) { return; }
       this.topicTitle = topic.title;
@@ -122,19 +184,25 @@ export struct ComposerPage {
         if (!topic.canReply) { throw new Error('该话题当前不开放回复，或当前账号没有回复权限。'); }
         this.permitted = true;
       }
+      if (alreadyLoaded) { return; }
       const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
       try {
-        this.store = await preferences.getPreferences(context, { name: 'forum_composer_drafts_v1' });
-        if (request !== this.prepareGeneration || this.session.user?.id !== this.ownerId) { this.store = undefined; return; }
-        const saved: preferences.ValueType = await this.store.get(this.draftKey, '');
+        const store: preferences.Preferences = await preferences.getPreferences(context, { name: 'forum_composer_drafts_v1' });
+        if (request !== this.prepareGeneration || this.session.user?.id !== this.ownerId) { return; }
+        this.store = store;
+        const saved: preferences.ValueType = await store.get(this.draftKey, '');
         if (request !== this.prepareGeneration || this.session.user?.id !== this.ownerId) { return; }
         this.draft = typeof saved === 'string' && saved.length > 0 ? saved : this.initialRaw;
         this.saveMessage = saved ? '已恢复本机草稿' : '';
       } catch {
+        if (request !== this.prepareGeneration || this.session.user?.id !== this.ownerId) { return; }
+        this.store = undefined;
         this.draft = this.initialRaw;
         this.saveMessage = '当前草稿暂时无法保存到本机';
       }
+      if (request !== this.prepareGeneration || this.session.user?.id !== this.ownerId) { return; }
       this.attachments = draftAttachments.get(this.draftKey) || [];
+      this.draftLoaded = true;
     } catch (error) {
       if (request === this.prepareGeneration) { this.error = composerError(error); this.permitted = false; }
     }
@@ -148,7 +216,7 @@ export struct ComposerPage {
   }
 
   private async saveDraft(): Promise<void> {
-    if (!this.draftKey || this.store === undefined) { return; }
+    if (!this.draftLoaded || !this.draftKey || this.store === undefined) { return; }
     const key: string = this.draftKey;
     const value: string = this.draft;
     const store: preferences.Preferences = this.store;
@@ -163,9 +231,16 @@ export struct ComposerPage {
     this.changeDraft(`${this.draft}${this.draft.length > 0 ? '\n' : ''}${value}`);
   }
 
+  private toggleEmoji(): void {
+    const visible: boolean = !this.showEmoji;
+    if (visible) { this.textAreaController?.stopEditing(); }
+    this.showEmoji = visible;
+  }
+
   private async chooseAttachment(image: boolean): Promise<void> {
     if (this.submitting || this.picking || !this.permitted) { return; }
     this.picking = true;
+    this.notifyDismissAvailability();
     this.error = '';
     const owner: number = this.ownerId;
     const generation: number = this.prepareGeneration;
@@ -206,7 +281,7 @@ export struct ComposerPage {
         draftAttachments.set(this.draftKey, this.attachments);
       } finally { if (file !== undefined) { await fileIo.close(file); } }
     } catch (error) { this.error = composerError(error); }
-    finally { this.picking = false; }
+    finally { this.picking = false; this.notifyDismissAvailability(); }
   }
 
   private removeAttachment(id: string): void {
@@ -229,6 +304,7 @@ export struct ComposerPage {
   private async submit(): Promise<void> {
     if (!this.canSubmit) { return; }
     this.submitting = true;
+    this.notifyDismissAvailability();
     this.error = '';
     const owner: number = this.ownerId;
     const generation: number = this.prepareGeneration;
@@ -270,6 +346,7 @@ export struct ComposerPage {
       const post: Post = this.postId > 0 ? await forumApi.updatePost(this.postId, this.draft, cancellation) :
         await forumApi.createPost(this.topicId, this.draft, this.replyTo > 0 ? this.replyTo : undefined, cancellation);
       ensureOwner();
+      this.submissionSucceeded = true;
       this.permitted = false;
       // Server success remains success even if local draft cleanup cannot be flushed.
       if (this.store !== undefined) {
@@ -286,7 +363,11 @@ export struct ComposerPage {
         this.error = composerError(error);
         await this.saveDraft();
       }
-    } finally { if (this.writeRequest === cancellation) { this.writeRequest = undefined; } this.submitting = false; }
+    } finally {
+      if (this.writeRequest === cancellation) { this.writeRequest = undefined; }
+      this.submitting = false;
+      this.notifyDismissAvailability();
+    }
   }
 
   private leave(): boolean {
@@ -294,6 +375,7 @@ export struct ComposerPage {
       this.getUIContext().getPromptAction().showToast({ message: this.submitting ? '正在提交，请稍候' : '请先完成文件选择' });
       return true;
     }
+    if (!this.draftLoaded) { return false; }
     if (this.draft !== this.initialRaw || this.attachments.length > 0) {
       this.getUIContext().showAlertDialog({ title: '离开编辑器？', message: '可以保留草稿，稍后继续编辑。',
         primaryButton: { value: '保留草稿返回', action: (): void => { this.saveDraft().then((): void => { this.onDone(); }); } },
@@ -309,78 +391,126 @@ export struct ComposerPage {
     draftAttachments.delete(this.draftKey);
     this.draft = this.initialRaw;
     this.attachments = [];
+    this.discardedDraft = true;
     this.onDone();
   }
 
   @Builder
-  emojiSheet() {
-    Column({ space: 18 }) {
-      Text('选择表情').fontSize(23).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
-      Flex({ wrap: FlexWrap.Wrap }) {
-        ForEach(this.emojis, (emoji: string) => {
-          Button(emoji, { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(27).width(64).height(56)
-            .onClick(() => { this.changeDraft(this.draft + emoji); this.showEmoji = false; })
-        }, (emoji: string): string => emoji)
-      }.width('100%')
-    }.padding(24).width('100%').alignItems(HorizontalAlign.Start)
+  emojiPalette() {
+    Flex({ wrap: FlexWrap.Wrap }) {
+      ForEach(this.emojis, (emoji: string) => {
+        Button(emoji, { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(24).width(48).height(44).padding(0)
+          .enabled(this.permitted && !this.loading && !this.submitting && !this.picking).accessibilityText(`插入表情 ${emoji}`)
+          .onClick(() => { this.changeDraft(this.draft + emoji); this.showEmoji = false; })
+      }, (emoji: string): string => emoji)
+    }.width('100%').padding({ top: 4, bottom: 4 })
+      .backgroundColor($r('app.color.selected_background')).borderRadius(12).id('composer_emoji_palette')
   }
 
-  build() {
-    NavDestination() {
-      Column({ space: 12 }) {
+  @Builder
+  toolButton(tool: ComposerTool) {
+    Button({ type: ButtonType.Circle, buttonStyle: ButtonStyleMode.TEXTUAL }) {
+      SymbolGlyph(tool.symbol).fontSize(22).fontColor([tool.selected ? $r('app.color.accent') : $r('app.color.text_primary')])
+    }.width(48).height(48).enabled(tool.enabled).accessibilityText(tool.label)
+      .accessibilitySelected(tool.selected).id(tool.id)
+      .backgroundColor(tool.selected ? $r('app.color.selected_background') : Color.Transparent)
+      .onClick(tool.action)
+  }
+
+  @Builder
+  editorContent() {
+    Column({ space: this.presentedAsSheet ? 8 : 12 }) {
+      if (this.presentedAsSheet) {
+        Row({ space: 8 }) {
+          Column({ space: 3 }) {
+            Text(this.title).fontSize(17).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+              .maxLines(1).id('composer_sheet_title')
+            Text(this.topicTitle || (this.loading ? '正在准备编辑器…' : 'LINUX DO'))
+              .fontSize(12).fontColor($r('app.color.text_secondary')).maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+          Button({ type: ButtonType.Circle, buttonStyle: ButtonStyleMode.TEXTUAL }) {
+            SymbolGlyph($r('sys.symbol.xmark')).fontSize(20).fontColor([$r('app.color.text_secondary')])
+          }.width(44).height(44).enabled(!this.submitting && !this.picking).accessibilityText('关闭编辑器')
+            .id('composer_sheet_close').onClick((): void => { this.requestClose(); })
+        }.width('100%').height(48)
+      } else {
         Text(this.topicTitle).fontSize(16).fontColor($r('app.color.text_secondary')).maxLines(2).width('100%')
-        if (this.loading) { LoadingProgress().width(36).height(36) }
-        if (this.error) {
-          Column({ space: 6 }) {
-            Text(this.error).fontSize(14).fontColor($r('app.color.text_primary')).width('100%')
-            if (!this.permitted) {
-              Button('重新检查权限', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40).enabled(!this.loading)
-                .onClick(() => { this.initialized = false; this.prepare(); })
-            }
-          }.width('100%').padding(12).backgroundColor($r('app.color.selected_background')).borderRadius(12)
-        }
-        TextArea({ text: this.draft, placeholder: '写下你的回复…\n支持 Markdown 格式' })
-          .fontSize(16).fontColor($r('app.color.text_primary')).placeholderColor($r('app.color.text_secondary'))
-          .backgroundColor($r('app.color.surface')).borderRadius(18).padding(16).layoutWeight(1).width('100%')
-          .maxLength(65536).enabled(this.permitted && !this.submitting)
-          .onChange((value: string): void => { this.changeDraft(value); })
-        if (this.attachments.length > 0) {
+      }
+      if (this.loading) { LoadingProgress().width(24).height(24) }
+      if (this.error) {
+        Column({ space: 6 }) {
+          Text(this.error).fontSize(13).fontColor($r('app.color.text_primary')).width('100%').maxLines(2)
+          if (!this.permitted) {
+            Button('重新检查权限', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40).enabled(!this.loading)
+              .onClick(() => { this.initialized = false; void this.prepare(); })
+          }
+        }.width('100%').padding(12).backgroundColor($r('app.color.selected_background')).borderRadius(12)
+      }
+      TextArea({ text: this.draft, placeholder: '写下你的回复…\n支持 Markdown 格式', controller: this.textAreaController })
+        .fontSize(16).fontColor($r('app.color.text_primary')).placeholderColor($r('app.color.text_secondary'))
+        .backgroundColor($r('app.color.surface')).borderRadius(16).padding(12).layoutWeight(1).width('100%')
+        .maxLength(65536).enabled(this.permitted && !this.loading && !this.submitting)
+        .onChange((value: string): void => { this.changeDraft(value); }).id('composer_text_area')
+      if (this.attachments.length > 0) {
+        Scroll() {
           Column({ space: 6 }) {
             ForEach(this.attachments, (attachment: DraftAttachment) => {
               Row({ space: 8 }) {
                 Text(`${attachment.name} · ${Math.ceil(attachment.size / 1024)} KB`).fontSize(12)
-                  .fontColor($r('app.color.text_secondary')).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-                Button('移除', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40).fontSize(12).enabled(!this.submitting)
+                  .fontColor($r('app.color.text_secondary')).maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+                Button({ type: ButtonType.Circle, buttonStyle: ButtonStyleMode.TEXTUAL }) {
+                  SymbolGlyph($r('sys.symbol.xmark')).fontSize(16).fontColor([$r('app.color.text_secondary')])
+                }.width(44).height(44).enabled(!this.loading && !this.submitting).accessibilityText(`移除附件 ${attachment.name}`)
                   .onClick(() => { this.removeAttachment(attachment.id); })
               }.width('100%')
             }, (attachment: DraftAttachment): string => attachment.id)
           }.width('100%').padding({ left: 8, right: 8 })
-        }
-        Flex({ wrap: FlexWrap.Wrap }) {
-          Button('图片', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(44).fontSize(14)
-            .enabled(this.permitted && !this.submitting && !this.picking).onClick(() => { this.chooseAttachment(true); })
-          Button('附件', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(44).fontSize(14)
-            .enabled(this.permitted && !this.submitting && !this.picking).onClick(() => { this.chooseAttachment(false); })
-          Button('表情', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(44).fontSize(14)
-            .enabled(this.permitted && !this.submitting).onClick(() => { this.showEmoji = true; })
-          Button('粗体', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(44).fontSize(14)
-            .enabled(this.permitted && !this.submitting).onClick(() => { this.insert('**内容**'); })
-          Button('链接', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(44).fontSize(14)
-            .enabled(this.permitted && !this.submitting).onClick(() => { this.insert('[链接文字](https://)'); })
-        }.width('100%')
-        Row() {
-          Text(this.submitting ? '正在提交…' : `${this.draft.length} 字${this.saveMessage ? ` · ${this.saveMessage}` : ''}`)
-            .fontSize(12).fontColor($r('app.color.text_secondary')).layoutWeight(1)
-          Button(this.postId > 0 ? '保存修改' : '发表回复', { type: ButtonType.Capsule }).height(48).fontSize(16)
-            .backgroundColor($r('app.color.accent')).fontColor($r('app.color.on_accent')).enabled(this.canSubmit)
-            .onClick(() => { this.submit(); })
-        }.width('100%').padding({ top: 10, bottom: 10 }).systemMaterial(materialFor(this.appearance))
-      }.width('100%').height('100%').padding({ left: 18, right: 18, top: 16, bottom: 14 })
-        .bindSheet($$this.showEmoji, this.emojiSheet, { height: SheetSize.MEDIUM, dragBar: true,
-          backgroundColor: $r('app.color.surface') })
-    }.title(this.title).padding({ top: this.topInset, bottom: this.bottomInset })
-      .backgroundColor($r('app.color.page_background')).onShown(() => { this.prepare(); })
-      .onHidden(() => { if (!this.submitting) { this.saveDraft(); } })
-      .onBackPressed((): boolean => this.leave())
+        }.width('100%').constraintSize({ maxHeight: this.presentedAsSheet ? 72 : 144 }).scrollBar(BarState.Off)
+      }
+      if (this.showEmoji) { this.emojiPalette() }
+      Row({ space: 4 }) {
+        this.toolButton({ symbol: $r('sys.symbol.picture'), label: '选择图片', id: 'composer_add_image',
+          enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
+          action: (): void => { void this.chooseAttachment(true); } })
+        this.toolButton({ symbol: $r('sys.symbol.paperclip'), label: '选择附件', id: 'composer_add_attachment',
+          enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
+          action: (): void => { void this.chooseAttachment(false); } })
+        this.toolButton({ symbol: $r('sys.symbol.face_smiling'), label: this.showEmoji ? '收起表情' : '插入表情', id: 'composer_show_emoji',
+          enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: this.showEmoji,
+          action: (): void => { this.toggleEmoji(); } })
+        this.toolButton({ symbol: $r('sys.symbol.bold'), label: '插入粗体', id: 'composer_insert_bold',
+          enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
+          action: (): void => { this.insert('**内容**'); } })
+        this.toolButton({ symbol: $r('sys.symbol.link'), label: '插入链接', id: 'composer_insert_link',
+          enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
+          action: (): void => { this.insert('[链接文字](https://)'); } })
+      }.width('100%').height(48).justifyContent(FlexAlign.SpaceBetween)
+      Row() {
+        Text(this.submitting ? '正在提交…' : `${this.draft.length} 字${this.saveMessage ? ` · ${this.saveMessage}` : ''}`)
+          .fontSize(11).fontColor($r('app.color.text_secondary')).layoutWeight(1).maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Button(this.postId > 0 ? '保存修改' : '发表回复', { type: ButtonType.Capsule }).height(48).fontSize(15)
+          .backgroundColor($r('app.color.accent')).fontColor($r('app.color.on_accent')).enabled(this.canSubmit)
+          .onClick(() => { void this.submit(); }).id('composer_submit')
+      }.width('100%').padding({ top: 2, bottom: 2 }).systemMaterial(materialFor(this.appearance))
+    }.width('100%').height('100%').padding({ left: 18, right: 18, top: this.presentedAsSheet ? 4 : 16,
+      bottom: 12 + (this.presentedAsSheet ? this.bottomInset : 0) })
+  }
+
+  build() {
+    if (this.presentedAsSheet) {
+      Column() { this.editorContent() }
+        .width('100%').height('100%').backgroundColor($r('app.color.page_background'))
+        .onAppear((): void => { this.presentationShown(); })
+        .onDisAppear((): void => { this.presentationHidden(); })
+    } else {
+      NavDestination() { this.editorContent() }
+        .title(this.title).padding({ top: this.topInset, bottom: this.bottomInset })
+        .backgroundColor($r('app.color.page_background')).onShown(() => { this.presentationShown(); })
+        .onHidden(() => { this.presentationHidden(); })
+        .onBackPressed((): boolean => this.leave())
+    }
   }
 }

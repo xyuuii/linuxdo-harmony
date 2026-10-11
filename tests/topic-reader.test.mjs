@@ -53,9 +53,10 @@ const prefix = extract(topicSource, 'export struct TopicPage', '  @Builder\n');
 const close = /onClose: \(\): void => \{([^\n]*)\}/.exec(topicSource);
 const back = /\.onBackPressed\(\(\): boolean => \{([^\n]*)\}/.exec(topicSource);
 const hide = /\.onHidden\(\(\) => \{([\s\S]*?)\}\)/.exec(topicSource);
-assert.ok(close && back && hide, 'Production viewer-close, native-Back and navigation-hide handlers must remain extractable.');
+const shown = /\.onShown\(\(\) => \{([\s\S]*?)\}\)/.exec(topicSource);
+assert.ok(close && back && hide && shown, 'Production viewer-close, native-Back and navigation lifecycle handlers must remain extractable.');
 const pageClass = (prefix + `\ncloseFromViewer(): void {${close[1]}}\nbackFromViewer(): boolean {${back[1]}}` +
-  `\nhideFromNavigation(): void {${hide[1]}}\n}\n`)
+  `\nhideFromNavigation(): void {${hide[1]}}\nshowFromNavigation(): void {${shown[1]}}\n}\n`)
   .replace('export struct TopicPage', 'export class TopicPage')
   .replace(/^\s*@(?:Computed|Monitor\([^\n]*\))\s*\n/gm, '\n')
   .replace(/@(Param|Event|Local) /g, '');
@@ -122,6 +123,89 @@ function readerRuntime() {
 function imagePost(id, cooked) {
   return { id, postNumber: id, topicId: 100, cooked, replyToPostNumber: 0, replyCount: 0 };
 }
+
+test('same-floor edit refreshes data once, ordinary floor navigation only jumps and shown consumes pending refresh', () => {
+  const { page, reads } = readerRuntime();
+  const jumps = [];
+  page.jump = number => { jumps.push(number); };
+  page.entered = true;
+  page.postNumber = 147;
+  page.lastInputNumber = 147;
+  page.currentNumber = 147;
+  page.reloadSignal = 1;
+  page.targetNumberChanged();
+  assert.deepEqual(reads, [147], 'Editing an already loaded floor must re-fetch it, not only locate its old row.');
+  assert.deepEqual(jumps, []);
+  assert.equal(page.handledReloadSignal, 1);
+  page.targetNumberChanged();
+  assert.deepEqual(reads, [147], 'The consumed refresh and unchanged target must not perform a second request.');
+  assert.deepEqual(jumps, []);
+
+  page.postNumber = 148;
+  page.targetNumberChanged();
+  assert.deepEqual(jumps, [148]);
+  assert.deepEqual(reads, [147], 'Changing only the target keeps normal cached-floor navigation.');
+  page.postNumber = 149;
+  page.reloadSignal = 2;
+  page.targetNumberChanged();
+  assert.deepEqual(reads, [147, 149]);
+  assert.deepEqual(jumps, [148], 'A coalesced target and refresh change has one reload path.');
+
+  page.hidden = true;
+  page.reloadSignal = 3;
+  page.currentNumber = 155;
+  page.targetNumberChanged();
+  assert.deepEqual(reads, [147, 149]);
+  page.showFromNavigation();
+  assert.deepEqual(reads, [147, 149, 149], 'Returning to a hidden editor result refreshes its floor instead of an unrelated scroll position.');
+  assert.equal(page.handledReloadSignal, 3);
+  page.targetNumberChanged();
+  assert.deepEqual(reads, [147, 149, 149]);
+
+  const initial = readerRuntime();
+  initial.page.postNumber = 7;
+  initial.page.reloadSignal = 4;
+  initial.page.showFromNavigation();
+  initial.page.targetNumberChanged();
+  assert.deepEqual(initial.reads, [7], 'First onShown synchronizes the incoming signal before a queued monitor runs.');
+
+  for (const busyField of ['loading', 'writeBusy']) {
+    const delayed = readerRuntime();
+    delayed.page.entered = true;
+    delayed.page.lastInputNumber = 147;
+    delayed.page.postNumber = 148;
+    delayed.page.reloadSignal = 1;
+    delayed.page[busyField] = true;
+    delayed.page.targetNumberChanged();
+    assert.deepEqual(delayed.reads, [], `${busyField} must defer the refresh request.`);
+    assert.equal(delayed.page.handledReloadSignal, 0, 'A deferred signal must remain unconsumed.');
+    assert.equal(delayed.page.lastInputNumber, 147, 'A deferred target must remain pending too.');
+    delayed.page[busyField] = false;
+    delayed.page.targetNumberChanged();
+    assert.deepEqual(delayed.reads, [148], `${busyField} completion must consume the pending signal once.`);
+    assert.equal(delayed.page.handledReloadSignal, 1);
+    assert.equal(delayed.page.lastInputNumber, 148);
+    delayed.page[busyField] = true;
+    delayed.page.targetNumberChanged();
+    delayed.page[busyField] = false;
+    delayed.page.targetNumberChanged();
+    assert.deepEqual(delayed.reads, [148], 'Busy transitions without new input cannot repeat a consumed refresh.');
+
+    const targetOnly = readerRuntime();
+    const deferredJumps = [];
+    targetOnly.page.jump = number => { deferredJumps.push(number); };
+    targetOnly.page.entered = true;
+    targetOnly.page.postNumber = 9;
+    targetOnly.page[busyField] = true;
+    targetOnly.page.targetNumberChanged();
+    assert.deepEqual(deferredJumps, []);
+    assert.equal(targetOnly.page.lastInputNumber, 1);
+    targetOnly.page[busyField] = false;
+    targetOnly.page.targetNumberChanged();
+    assert.deepEqual(deferredJumps, [9], 'Ordinary floor navigation must also wait until the reader is not busy.');
+    assert.deepEqual(targetOnly.reads, []);
+  }
+});
 
 test('a floor gallery deduplicates original images and excludes emoji, insecure pictures and other floors', () => {
   const { page } = readerRuntime();

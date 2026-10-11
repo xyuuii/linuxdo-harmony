@@ -9,7 +9,7 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 基于 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的真实功能与 Discourse 接口，以 ArkTS / ArkUI V2 重构的鸿蒙原生客户端。固定参考提交 `e31fe8e3a06a5de2e9c013925dd1c40a7743d30e`，源代码版本 1.1.1。
 
-本地应用版本 `0.2.2`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
+本地应用版本 `0.2.3`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
 
 0.1.1 收紧首页、分类和搜索的信息密度：话题标题最多两行，缩小卡片留白；分类等级与名称同排。分类详情移除了重复标题和不适用的底部页签预留，列表用满可用高度。首页和搜索仅在滚动末端为浮动页签留空间。
 
@@ -18,6 +18,8 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 0.2.1 参考实际手机上的酷安鸿蒙版阅读布局，引入作者/话题双行吸顶标题；初版由原生 NavDestination 的56vp标题栏承担。底部左侧“写回复”胶囊一次进入编辑器，右侧 HdsActionBar 提供楼层、回顶与收放控制。向下阅读时回复入口淡出收窄，右侧保留原生主按钮；反向滚动或点按可展开。移除常驻末尾留白，末尾继续上拉时才浮现带回顶入口的提示，松手弹回并保留约3.2秒后淡出。从尾部分页返回顶部会恢复真实首楼和标题，长首楼也可使用回顶。按钮接入系统沉浸材质，外观等级继续生效；减少动态效果时保持阅读操作栏展开并停止弹簧动效。
 
 0.2.2 将窗口、四个主页面及帖子阅读区扩展到透明系统栏后方。系统区高度随窗口避让信息更新，内容首尾与操作控件各按所在边界避让一次。帖子使用含状态区的自绘模糊吸顶标题，保留原生页面返回语义；底部工具栏避开手势区；主导航保留独立毛玻璃背板与系统光感，减少动态时仍保留模糊。完整首批内容通过原生滚动边界平滑回顶，尾部分页仍先恢复真实首批楼层。键盘出现时窗口按 RESIZE 收缩，主导航隐藏。
+
+0.2.3 去除状态区的灰色横条，以低强度模糊、少量主题色和原生 alpha 蒙版渐隐保持沉浸。写回复改为原生底部半模态，默认50%并可上拉到85%；图片、附件、表情、粗体和链接改为48vp图标工具，表情在面板内展开。键盘出现时选择较高档位并压缩内容，工具和发表按钮保留在键盘上方。草稿恢复完成前禁止写回，关闭确认保留，取消关闭不销毁编辑器。
 
 首页、分类、搜索和我的使用 AdaptiveNavigationBar 主导航：向下浏览时，同一个材质胶囊连续收拢为右下当前页图标按钮；反向滚动或点击按钮连续展开为四个页签。表面与图标节点保持，文字随收拢渐隐，列表阅读位置保持。开启减少动态效果或高对比时，主导航保持展开。
 
@@ -70,7 +72,7 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 启动时先获取主窗口并等待 `setWindowLayoutFullScreen(true)` 完成，再加载页面；任一步失败仍按默认布局继续加载，窗口布局失败只记录安全错误码。Index 通过 `@Env(SystemProperties.WINDOW_AVOID_AREA)` 获取以 vp 表示的动态避让信息：顶部取状态栏与挖孔高度的最大值，底部取手势指示条、系统栏与挖孔高度的最大值，不相加，也不把键盘高度计入系统栏避让。
 
-Root / Navigation 负责扩展系统区，子 List / Refresh 保持继承的全高视口，不重复叠加 `ignoreLayoutSafeArea`。四个主页面的内容可滚过系统栏后方，首尾内容与控件保留各自的动态避让。状态区 EdgeBackdrop 使用只读的高斯背景模糊与主题渐隐：轻柔、标准、丰富的 radius 分别为12、20、28，关闭时取消模糊，高对比时使用实色；该层不响应触摸或交互光晕。Root 使用100%高度并设置 UIContext 的 `RESIZE` 键盘避让，键盘可见时隐藏主导航。
+Root / Navigation 负责扩展系统区，子 List / Refresh 保持继承的全高视口，不重复叠加 `ignoreLayoutSafeArea`。四个主页面的内容可滚过系统栏后方，首尾内容与控件保留各自的动态避让。状态区 EdgeBackdrop 使用只读的高斯背景模糊与主题渐隐：轻柔、标准、丰富的 radius 分别为3、5、7，以局部原生 alpha 蒙版一起渐隐到透明；关闭时取消模糊，高对比时使用实色；该层不响应触摸或交互光晕。Root 使用100%高度，普通页面采用 UIContext 的 `RESIZE`，键盘可见时隐藏主导航。半模态编辑器期间暂用 `OFFSET`，由 Sheet 自身的 `RESIZE_ONLY` 压缩输入内容；真正退场后恢复 `RESIZE`。
 
 [华为设计规范](https://developer.huawei.com/consumer/cn/design/) · [HarmonyOS 7 / API 26 升级指导](https://developer.huawei.com/consumer/en/doc/harmonyos-releases/upgrade-adaptation) · [官方沉浸光感方案](https://developer.huawei.com/consumer/cn/doc/guidebook/solution-0000002784570841)
 
@@ -107,7 +109,7 @@ npm install --prefix .local-test-runtime --no-save --package-lock=false --ignore
 DEVECO_TYPESCRIPT_PATH="$PWD/.local-test-runtime/node_modules/typescript/lib/typescript.js" node --test tests/*.test.mjs
 ```
 
-当前93项本地离线回归已通过。GitHub Actions 使用相同的 TypeScript 4.9.5 和 Node 22 执行同一测试集；测试只读取源码和编译运行时，不访问真实论坛或设备存储。它不编译 ArkUI、不登录论坛，不替代 SDK 编译及设备验收。
+当前102项本地离线回归已通过。GitHub Actions 使用相同的 TypeScript 4.9.5 和 Node 22 执行同一测试集；测试只读取源码和编译运行时，不访问真实论坛或设备存储。它不编译 ArkUI、不登录论坛，不替代 SDK 编译及设备验收。
 
 本机 `app/build-profile.json5` 不进入 Git；仓库提供无凭据的 `build-profile.example.json5`，首次执行 build.sh 会复制模板。需要安装到自己的设备时，以自己的开发者账号生成包含目标设备的调试签名：
 
