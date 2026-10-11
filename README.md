@@ -11,6 +11,8 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 本地应用版本 `0.2.6`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
 
+调试包：[0.2.6 GitHub Release](https://github.com/xyuuii/linuxdo-harmony/releases/tag/v0.2.6) · [下载 HAP](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.6/LinuxDo-HarmonyOS7-0.2.6-debug.hap) · [SHA256 校验文件](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.6/SHA256SUMS)。这是开发调试签名包，安装受签名设备授权限制；其他设备请按下方构建说明使用自己的开发者签名。二进制保存在 Release 附件中。
+
 0.1.1 收紧首页、分类和搜索的信息密度：话题标题最多两行，缩小卡片留白；分类等级与名称同排。分类详情移除了重复标题和不适用的底部页签预留，列表用满可用高度。首页和搜索仅在滚动末端为浮动页签留空间。
 
 0.2.0 重排帖子阅读页：作者与楼主标记在标题上方，主楼正文与图片铺满内容栏，回复改为连续列表，楼中楼以浅底区域呈现。底部固定“说点什么”入口和楼层导航；喜欢直接点按、其他回应长按选择，编辑/删除/简评/解决方案收在更多菜单。图片按原始宽高展示，长图有大预览；点开后黑底全屏，同楼层图片左右切换，支持双击和双指缩放、放大后平移，返回保持阅读位置。
@@ -140,12 +142,12 @@ macOS 上如遇 CLI 把已有镜像误判未下载，可用 `./scripts/start-emu
 - `devecocli check lint` 当前返回 Files checked:0，不能作为 lint 有效通过；静态依据是 SDK 编译。
 - SaveButton 调用 createAsset 的静态权限提示与官方临时授权场景对应，不为消除提示增加广域图库权限；相关文件/网络异常有释放和失败处理。
 
-验证记录见 [docs/acceptance.md](docs/acceptance.md)。本机日志、账号界面和签名安装包位于被忽略的 `artifacts/`，不随公开仓库分发；其他开发者需使用自己的 SDK 和签名构建。
+验证记录见 [docs/acceptance.md](docs/acceptance.md)。本机日志、账号界面、签名私钥和配置不随公开源码分发；0.2.6 调试签名安装包单独提供在 GitHub Release，其他开发者需使用自己的 SDK 和设备签名构建。
 
 ## 与 Android 版本的区别
 
 - 页面和系统能力全部为鸿蒙原生；网页登录只用于身份认证/站点验证。
-- 原 Android APK 版本源不用于鸿蒙更新，当前未配置应用商店/HAP 更新分发渠道。
+- 原 Android APK 版本源不用于鸿蒙更新。GitHub Release 提供手动下载HAP，应用内尚未接入自动更新或应用商店渠道。
 - 原外部浏览器 RSA user-api-key 授权由本应用 ArkWeb 身份提供方登录和同源传输替代；没有注册 Android 的 discourse:// 授权回调。
 - 保留源项目 track_visit=false，没有添加阅读计时上报，不承诺增加网站阅读活跃统计。
 - Android 参考克隆只保留在本地 .reference，排除 Git 和交付包。公开仓库为独立鸿蒙实现，归属及许可范围见 [THIRD_PARTY.md](THIRD_PARTY.md)。
