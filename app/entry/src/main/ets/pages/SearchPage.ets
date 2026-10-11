@@ -6,6 +6,8 @@ import { plainText } from '../services/ForumPresentation';
 @ComponentV2
 export struct SearchPage {
   @Param reloadSignal: number = 0;
+  @Param listScroller: Scroller = new Scroller();
+  @Event onReadScroll: (offset: number, state: ScrollState, source: ScrollSource) => void = (): void => {};
   @Event onOpenTopic: (id: number, postNumber: number) => void = (): void => {};
   @Event onVerify: () => void = (): void => {};
   @Local query: string = '';
@@ -73,7 +75,7 @@ export struct SearchPage {
           .selected(this.orderIndex).value(searchOrders[this.orderIndex].label)
           .onSelect((index: number) => { this.orderIndex = index; if (this.query.trim()) { void this.search(true); } })
       }.width('100%')
-      List({ space: 6 }) {
+      List({ scroller: this.listScroller, space: 6 }) {
         ForEach(this.items, (item: TopicListItem) => {
           ListItem() {
             TopicRow({ item: item, excerpt: this.excerpts.get(item.topic.id) || '',
@@ -97,7 +99,7 @@ export struct SearchPage {
             }.width('100%').padding({ top: 64, bottom: 24 })
           }
         }
-      }.width('100%').layoutWeight(1).scrollBar(BarState.Off).contentEndOffset(92)
+      }.width('100%').layoutWeight(1).scrollBar(BarState.Off).contentEndOffset(92).onWillScroll(this.onReadScroll)
     }.width('100%').height('100%').padding({ left: 14, right: 14 })
       .onDisAppear(() => { this.request?.cancel(); })
   }

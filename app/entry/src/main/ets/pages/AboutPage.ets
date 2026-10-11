@@ -25,7 +25,7 @@ export struct AboutPage {
             }.alignItems(HorizontalAlign.Start).layoutWeight(1)
           }.width('100%')
           Column({ space: 14 }) {
-            Text('版本 0.2.0 · 本地开发版本').fontColor($r('app.color.text_primary'))
+            Text('版本 0.2.1 · 本地开发版本').fontColor($r('app.color.text_primary'))
             Text(`登录状态：${forumSession.user !== undefined ? forumSession.user.username : '未登录'}`)
               .fontSize(14).fontColor($r('app.color.text_secondary'))
             Text(`沉浸材质：${materialSupported() ? '设备支持' : '使用清晰样式'}`)

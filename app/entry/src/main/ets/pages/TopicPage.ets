@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
-import { window } from '@kit.ArkUI';
+import { window, curves, ButtonModifier, LengthMetrics, ColorMetrics } from '@kit.ArkUI';
+import { HdsActionBar, ActionBarButton, ActionBarStyle, BlurStrategy } from '@kit.UIDesignKit';
 import { http } from '@kit.NetworkKit';
 import { webview } from '@kit.ArkWeb';
 import { fileIo, picker } from '@kit.CoreFileKit';
@@ -13,6 +14,7 @@ import { RichPostContent, postContentUrl, parsePostContent, PostBlock } from '..
 import { NativeForumImage } from '../components/NativeForumImage';
 import { ForumImageViewer } from '../components/ForumImageViewer';
 import { relativeTime } from '../services/ForumPresentation';
+import { TopicScrollPolicy, endPullProgress, canShowTopicEnd } from '../services/TopicScrollPolicy';
 
 export interface TopicTreeRow {
   post: Post;
@@ -404,6 +406,13 @@ export struct TopicPage {
   @Local savingAttachment: boolean = false;
   @Local pictureUrls: string[] = [];
   @Local pictureInitialIndex: number = 0;
+  @Local toolbarExpanded: boolean = true;
+  @Local readerBarWidth: number = 360;
+  @Local endFeedbackProgress: number = 0;
+  @Local endFeedbackVisible: boolean = false;
+  private endPullDistance: number = 0;
+  private endHintTimer: number = 0;
+  private readonly scrollPolicy: TopicScrollPolicy = new TopicScrollPolicy();
   private pictureScrollOffset: number = 0;
   private pendingNumber: number = 0;
   private generation: number = 0;
@@ -417,6 +426,17 @@ export struct TopicPage {
 
   @Computed
   get originalAuthor(): string { return this.posts.find((post: Post): boolean => post.postNumber === 1)?.username || ''; }
+
+  @Computed
+  get readerToolsVisible(): boolean { return this.appearance.reduceMotion || this.toolbarExpanded; }
+
+  @Computed
+  get readerActionsWidth(): number { return this.appearance.reduceMotion ? 104 : 168; }
+
+  @Computed
+  get readerReplyWidth(): number {
+    return this.readerToolsVisible ? Math.max(0, this.readerBarWidth - 32 - 8 - this.readerActionsWidth) : 0;
+  }
 
   @Monitor('showPicture')
   pictureVisibilityChanged(): void {
@@ -455,6 +475,7 @@ export struct TopicPage {
 
   @Monitor('session.revision')
   accountChanged(): void {
+    this.resetReaderControls();
     this.writeRequest?.cancel();
     this.writeRequest = undefined;
     this.writeBusy = false;
@@ -507,6 +528,98 @@ export struct TopicPage {
     return this.stream.slice(this.sliceEnd + 1).filter((id: number): boolean => !this.consumed.includes(id));
   }
 
+  @Computed
+  get topicEnded(): boolean {
+    return canShowTopicEnd(this.topic !== undefined, this.posts.length, this.nextIds.length,
+      this.loading, this.error.length > 0);
+  }
+
+  @Computed
+  get replyLabel(): string {
+    return this.topic?.archived ? '帖子已归档' : this.topic?.closed ? '帖子已关闭' :
+      this.session.user === undefined ? '登录后参与讨论' : this.topic?.canReply ? '回复话题' : '暂无回复权限';
+  }
+
+  @Computed
+  get replyEnabled(): boolean {
+    return !this.writeBusy && this.topic !== undefined && !this.topic.closed && !this.topic.archived &&
+      (this.session.user === undefined || this.topic.canReply);
+  }
+
+  private dismissEndFeedback(animated: boolean = false): void {
+    if (this.endHintTimer !== 0) { clearTimeout(this.endHintTimer); this.endHintTimer = 0; }
+    this.endPullDistance = 0;
+    if (animated && !this.appearance.reduceMotion && this.endFeedbackProgress > 0) {
+      this.getUIContext().animateTo({ curve: curves.springMotion(0.32, 0.95), onFinish: (): void => {
+        if (this.endFeedbackProgress === 0) { this.endFeedbackVisible = false; }
+      } }, (): void => {
+        this.endFeedbackProgress = 0;
+      });
+    } else { this.endFeedbackProgress = 0; this.endFeedbackVisible = false; }
+  }
+
+  private resetReaderControls(): void {
+    this.dismissEndFeedback();
+    this.scrollPolicy.reset();
+    this.toolbarExpanded = true;
+  }
+
+  private readScroll(offset: number, state: ScrollState, source: ScrollSource): void {
+    const blocked: boolean = this.hidden || this.showPicture || this.showJump || this.loading || this.refreshing;
+    const userDriven: boolean = source === ScrollSource.DRAG || source === ScrollSource.FLING ||
+      source === ScrollSource.OTHER_USER_INPUT;
+    const expanded: boolean | undefined = this.scrollPolicy.update(offset, userDriven,
+      this.scroller.currentOffset().yOffset <= 1, blocked || this.appearance.reduceMotion);
+    if (expanded !== undefined) { this.toolbarExpanded = expanded; }
+    if (blocked || !this.topicEnded) { this.dismissEndFeedback(); return; }
+    // Reaching the last item, programmatic jumps and spring rebound are not a new pull.
+    if (source !== ScrollSource.DRAG || state !== ScrollState.Scroll) { return; }
+    if (this.scroller.isAtEnd() && offset > 0) {
+      if (this.endHintTimer !== 0) { clearTimeout(this.endHintTimer); this.endHintTimer = 0; }
+      this.endPullDistance = Math.min(64, this.endPullDistance + offset);
+      this.endFeedbackVisible = true;
+      this.endFeedbackProgress = this.appearance.reduceMotion ? 1 : endPullProgress(this.endPullDistance);
+    } else if (offset < 0 && this.endFeedbackProgress > 0) { this.dismissEndFeedback(true); }
+  }
+
+  private settleReaderScroll(): void {
+    this.scrollPolicy.reset();
+    if (this.endFeedbackProgress <= 0 || this.hidden || this.showPicture || !this.topicEnded) { return; }
+    if (this.appearance.reduceMotion) { this.endFeedbackProgress = 1; }
+    else {
+      this.getUIContext().animateTo({ curve: curves.springMotion(0.38, 0.86) }, (): void => {
+        this.endFeedbackProgress = 1;
+      });
+    }
+    if (this.endHintTimer !== 0) { clearTimeout(this.endHintTimer); }
+    this.endHintTimer = setTimeout((): void => { this.dismissEndFeedback(true); }, 3200);
+  }
+
+  private backToTopicTop(): void {
+    if (this.loading || this.writeBusy) { return; }
+    this.resetReaderControls();
+    // Tail pagination may retain the first post but omit its following floors.
+    if (this.sliceStart > 0) { this.jump(1); }
+    else {
+      this.currentNumber = 1;
+      this.highlightedId = 0;
+      this.pendingNumber = 0;
+      this.scroller.scrollTo({ xOffset: 0, yOffset: 0, animation: this.appearance.reduceMotion ? false :
+        { curve: curves.springMotion(0.42, 0.95) } });
+    }
+  }
+
+  private openFloorNavigation(): void {
+    this.dismissEndFeedback();
+    this.jumpInput = this.currentNumber.toString();
+    this.showJump = true;
+  }
+
+  private controlModifier(): ButtonModifier {
+    return new ButtonModifier().backgroundColor($r('app.color.surface'))
+      .systemMaterial(materialFor(this.appearance));
+  }
+
   private rebuild(): void {
     this.rows = topicTreeRows(this.posts, this.expanded, this.collapsed, this.treeView);
     this.source.update(this.rows);
@@ -552,6 +665,7 @@ export struct TopicPage {
 
   private async reload(number: number = 1): Promise<void> {
     if (this.loading || this.writeBusy) { this.refreshing = false; return; }
+    this.resetReaderControls();
     const request: number = ++this.generation;
     const owner: number = this.session.user?.id || 0;
     this.loading = true;
@@ -611,6 +725,7 @@ export struct TopicPage {
 
   private jump(number: number): void {
     if (!Number.isInteger(number) || number <= 0 || this.loading) { return; }
+    this.resetReaderControls();
     this.showJump = false;
     if (number === 1 && this.sliceStart > 0) { this.reload(1); }
     else if (this.posts.some((post: Post): boolean => post.postNumber === number)) { this.reveal(number); }
@@ -619,6 +734,7 @@ export struct TopicPage {
 
   private async tail(): Promise<void> {
     if (this.loading || this.writeBusy || this.stream.length === 0) { return; }
+    this.resetReaderControls();
     this.loading = true;
     this.error = '';
     const request: number = this.generation;
@@ -785,6 +901,8 @@ export struct TopicPage {
     this.pictureInitialIndex = this.pictureUrls.indexOf(safe);
     this.pictureUrl = safe;
     this.pictureScrollOffset = this.scroller.currentOffset().yOffset;
+    this.dismissEndFeedback();
+    this.scrollPolicy.reset();
     this.showPicture = true;
   }
 
@@ -903,6 +1021,101 @@ export struct TopicPage {
   }
 
 
+  @Builder
+  readerTitle() {
+    Column({ space: 2 }) {
+      Text(this.originalAuthor || 'LINUX DO').fontSize(16).fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary')).maxLines(1).id('topic_title_author')
+      Text(this.topic?.title || (this.loading ? '正在打开帖子…' : '话题详情')).fontSize(11)
+        .fontColor($r('app.color.text_secondary')).maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis }).id('topic_title_context')
+    }.width('100%').height(56).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Start)
+      .padding({ right: 12 }).systemMaterial(materialFor(this.appearance))
+  }
+
+  @Builder
+  readerToolbar() {
+    Row({ space: 8 }) {
+      Button({ type: ButtonType.Capsule, buttonStyle: ButtonStyleMode.NORMAL }) {
+        Row({ space: 8 }) {
+          SymbolGlyph($r('sys.symbol.message')).fontSize(18).fontColor([$r('app.color.text_secondary')])
+          Text(this.replyEnabled ? '写回复' : this.replyLabel).fontSize(14).maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.text_primary'))
+        }.width('100%').justifyContent(FlexAlign.Start).padding({ left: 14, right: 10 })
+      }.height(52).width(this.readerReplyWidth).clip(true).id('topic_reply_entry')
+        .backgroundColor($r('app.color.surface')).systemMaterial(materialFor(this.appearance))
+        .enabled(this.replyEnabled && this.readerToolsVisible).accessibilityText(this.replyLabel)
+        .opacity(this.readerToolsVisible ? 1 : 0)
+        .hitTestBehavior(this.readerToolsVisible ? HitTestMode.Default : HitTestMode.None)
+        .accessibilityLevel(this.readerToolsVisible ? 'yes' : 'no-hide-descendants')
+        .animation({ duration: this.appearance.reduceMotion ? 0 : 220, curve: Curve.EaseInOut })
+        .onClick((): void => { if (this.signedIn()) { this.onCompose(this.topicId, 0, 0); } })
+      HdsActionBar({
+        primaryButton: this.appearance.reduceMotion ? undefined : new ActionBarButton({
+          baseIcon: $r('sys.symbol.ellipsis_message'), altIcon: $r('sys.symbol.xmark'),
+          width: LengthMetrics.vp(52), iconSize: LengthMetrics.vp(23), id: 'topic_toolbar_toggle',
+          iconFillColor: ColorMetrics.resourceColor($r('app.color.accent')),
+          buttonModifier: this.controlModifier(),
+          accessibilityText: this.toolbarExpanded ? '收起阅读工具栏' : '展开阅读工具栏',
+          hoverTips: this.toolbarExpanded ? '收起工具栏' : '展开工具栏',
+          onClick: (): void => { this.toolbarExpanded = !this.toolbarExpanded; this.scrollPolicy.reset(); }
+        }),
+        startButtons: [new ActionBarButton({
+          baseIcon: $r('sys.symbol.list_bullet'), id: 'topic_jump',
+          width: LengthMetrics.vp(44), iconFillColor: ColorMetrics.resourceColor($r('app.color.text_primary')),
+          buttonModifier: this.controlModifier(), hoverTips: `楼层导航 · #${this.currentNumber}`,
+          accessibilityLevel: this.readerToolsVisible ? 'yes' : 'no-hide-descendants',
+          accessibilityText: `楼层导航，当前第${this.currentNumber}楼，共${this.stream.length}条内容`,
+          onClick: (): void => { this.openFloorNavigation(); }
+        })],
+        endButtons: [new ActionBarButton({
+          baseIcon: $r('sys.symbol.arrow_up_to_line'), id: 'topic_back_to_top',
+          width: LengthMetrics.vp(44), enabled: !this.loading && !this.writeBusy && this.posts.length > 0,
+          iconFillColor: ColorMetrics.resourceColor($r('app.color.text_primary')),
+          buttonModifier: this.controlModifier(), accessibilityText: '回到话题顶部', hoverTips: '回到话题顶部',
+          accessibilityLevel: this.readerToolsVisible ? 'yes' : 'no-hide-descendants',
+          onClick: (): void => { this.backToTopicTop(); }
+        })],
+        isExpand: this.readerToolsVisible,
+        $isExpand: (expanded: boolean): void => { this.toolbarExpanded = expanded; },
+        blurStrategy: BlurStrategy.DISABLE,
+        actionBarStyle: new ActionBarStyle({ height: LengthMetrics.vp(60), margin: LengthMetrics.vp(8),
+          innerSpace: LengthMetrics.vp(6), startSpace: LengthMetrics.vp(8), endSpace: LengthMetrics.vp(8),
+          isPrimaryIconChanged: this.toolbarExpanded, backgroundBlurStyle: BlurStyle.NONE,
+          backgroundColor: ColorMetrics.rgba(0, 0, 0, 0) })
+      }).width(this.readerActionsWidth).id('topic_reader_toolbar')
+        .bindSheet(this.showJump, this.jumpSheet, { height: SheetSize.MEDIUM, dragBar: true,
+          backgroundColor: $r('app.color.surface'), onDisappear: (): void => { this.showJump = false; } })
+    }.width('100%').height(76).padding({ left: 16, right: 16 }).justifyContent(FlexAlign.End)
+      .hitTestBehavior(HitTestMode.Transparent)
+      .onAreaChange((_old: Area, next: Area): void => {
+        const width: number = Number(next.width);
+        if (width > 0 && Number.isFinite(width) && Math.abs(width - this.readerBarWidth) > 0.5) {
+          this.readerBarWidth = width;
+        }
+      })
+  }
+
+  @Builder
+  topicEndFeedback() {
+    Row({ space: 8 }) {
+      SymbolGlyph($r('sys.symbol.chevron_up_2')).fontSize(18).fontColor([$r('app.color.text_secondary')])
+        .translate({ y: this.appearance.reduceMotion ? 0 : 4 * (1 - this.endFeedbackProgress) })
+      Text('已到话题末尾').fontSize(13).fontColor($r('app.color.text_secondary'))
+      Button('回到顶部', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(44).fontSize(13)
+        .fontColor($r('app.color.accent')).id('topic_end_back_to_top')
+        .enabled(!this.loading && !this.writeBusy).onClick((): void => { this.backToTopicTop(); })
+    }.padding({ left: 16, right: 6 }).height(52).borderRadius(28)
+      .backgroundColor($r('app.color.surface')).systemMaterial(materialFor(this.appearance))
+      .id('topic_end_feedback').opacity(this.endFeedbackProgress)
+      .scale({ x: this.appearance.reduceMotion ? 1 : 0.94 + 0.06 * this.endFeedbackProgress,
+        y: this.appearance.reduceMotion ? 1 : 0.94 + 0.06 * this.endFeedbackProgress })
+      .translate({ y: this.appearance.reduceMotion ? 0 : 20 * (1 - this.endFeedbackProgress) })
+      .visibility(this.endFeedbackVisible ? Visibility.Visible : Visibility.Hidden)
+      .hitTestBehavior(this.endFeedbackProgress > 0.1 ? HitTestMode.Default : HitTestMode.None)
+      .accessibilityLevel(this.endFeedbackProgress > 0.1 ? 'yes' : 'no-hide-descendants')
+  }
+
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.TopStart }) {
@@ -989,34 +1202,30 @@ export struct TopicPage {
                 } else if (this.nextIds.length > 0) {
                   Button('加载更多回复', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(44)
                     .onClick(() => { this.error = ''; this.loadSlice(false); })
-                } else if (this.posts.length > 0) {
-                  Text('已到话题末尾').fontSize(13).fontColor($r('app.color.text_secondary')).padding(24)
-                }
+                } else { Blank().height(1) }
               }.width('100%')
             }
-          }.width('100%').height('100%').contentEndOffset(12).cachedCount(3)
-            .scrollBar(BarState.Off)
+          }.width('100%').height('100%').contentEndOffset(84).cachedCount(3)
+            .scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true, effectEdge: EffectEdge.END })
+            .onWillScroll((offset: number, state: ScrollState, source: ScrollSource): void => {
+              this.readScroll(offset, state, source);
+            })
+            .onScrollStop((): void => { this.settleReaderScroll(); })
             .onScrollIndex((_start: number, end: number): void => {
               const row: TopicTreeRow | undefined = this.rows[Math.min(this.rows.length - 1, Math.max(0, end - 2))];
               if (row !== undefined) { this.currentNumber = row.post.postNumber; }
             })
             .onReachEnd(() => { if (this.entered && !this.showPicture && !this.error) { this.loadSlice(false); } })
         }.layoutWeight(1).onRefreshing(() => { this.reload(this.currentNumber); })
-        Row({ space: 10 }) {
-          Button(this.topic?.archived ? '帖子已归档' : this.topic?.closed ? '帖子已关闭' : this.session.user === undefined ? '登录后参与讨论' : this.topic?.canReply ? '说点什么…' : '暂无回复权限', { type: ButtonType.Capsule })
-            .height(44).layoutWeight(1).fontSize(14).fontColor($r('app.color.text_secondary'))
-            .backgroundColor($r('app.color.page_background')).id('topic_reply_entry')
-            .enabled(!this.writeBusy && this.topic !== undefined && !this.topic.closed && !this.topic.archived && (this.session.user === undefined || this.topic.canReply))
-            .onClick(() => { if (this.signedIn()) { this.onCompose(this.topicId, 0, 0); } })
-          Button(`#${this.currentNumber}`, { buttonStyle: ButtonStyleMode.TEXTUAL })
-            .id('topic_jump').height(44).width(68).fontSize(13).fontColor($r('app.color.text_secondary'))
-            .accessibilityText(`楼层导航，当前第${this.currentNumber}楼，共${this.stream.length}条内容`)
-            .onClick(() => { this.jumpInput = this.currentNumber.toString(); this.showJump = true; })
-            .bindSheet(this.showJump, this.jumpSheet, { height: SheetSize.MEDIUM, dragBar: true,
-              backgroundColor: $r('app.color.surface'), onDisappear: (): void => { this.showJump = false; } })
-        }.width('100%').padding({ left: 14, right: 8, top: 8, bottom: 8 })
-          .backgroundColor($r('app.color.surface')).systemMaterial(materialFor(this.appearance))
       }.width('100%').height('100%')
+      if (!this.showPicture) {
+        Column({ space: 10 }) {
+          this.topicEndFeedback()
+          this.readerToolbar()
+        }.width('100%').height('100%').justifyContent(FlexAlign.End)
+          .padding({ bottom: 4 }).zIndex(2)
+          .hitTestBehavior(HitTestMode.Transparent)
+      }
       if (this.showPicture) {
         ForumImageViewer({ urls: this.pictureUrls, initialIndex: this.pictureInitialIndex,
           ownerId: this.session.user?.id || 0, saving: this.savingPicture,
@@ -1026,7 +1235,8 @@ export struct TopicPage {
           .width('100%').height('100%').zIndex(10)
       }
       }.width('100%').height('100%')
-    }.title('帖子').hideTitleBar(this.showPicture).backgroundColor($r('app.color.page_background'))
+    }.title({ builder: this.readerTitle, height: 56 }, { backgroundColor: $r('app.color.page_background') })
+      .hideTitleBar(this.showPicture).backgroundColor($r('app.color.page_background'))
       .onBackPressed((): boolean => { if (this.showPicture) { this.showPicture = false; return true; } return false; })
       .onShown(() => {
         this.hidden = false;
@@ -1036,6 +1246,7 @@ export struct TopicPage {
         this.entered = true;
         this.reload(number);
       })
-      .onHidden(() => { this.showPicture = false; this.hidden = true; this.generation++; this.loading = false; this.refreshing = false; })
+      .onHidden(() => { this.dismissEndFeedback(); this.scrollPolicy.reset(); this.showPicture = false;
+        this.hidden = true; this.generation++; this.loading = false; this.refreshing = false; })
   }
 }

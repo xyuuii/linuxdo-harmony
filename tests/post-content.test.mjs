@@ -161,6 +161,7 @@ test('first-post navigation keeps the header and resets a retained-root tail sli
     .replace(/@(Param|Event|Local) /g, '');
   const exports = load(declarations + '\n' + page, {
     forumSession: session,
+    ...load(source('services/TopicScrollPolicy')),
     loadAppearanceSettings: () => ({}),
     RequestCancellation: cancellation.RequestCancellation,
     forumApi: { async fetchTopic(id, number) {

@@ -9,11 +9,15 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 基于 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的真实功能与 Discourse 接口，以 ArkTS / ArkUI V2 重构的鸿蒙原生客户端。固定参考提交 `e31fe8e3a06a5de2e9c013925dd1c40a7743d30e`，源代码版本 1.1.1。
 
-本地应用版本 `0.2.0`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
+本地应用版本 `0.2.1`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
 
 0.1.1 收紧首页、分类和搜索的信息密度：话题标题最多两行，缩小卡片留白；分类等级与名称同排。分类详情移除了重复标题和不适用的底部页签预留，列表用满可用高度。首页和搜索仅在滚动末端为浮动页签留空间。
 
 0.2.0 重排帖子阅读页：作者与楼主标记在标题上方，主楼正文与图片铺满内容栏，回复改为连续列表，楼中楼以浅底区域呈现。底部固定“说点什么”入口和楼层导航；喜欢直接点按、其他回应长按选择，编辑/删除/简评/解决方案收在更多菜单。图片按原始宽高展示，长图有大预览；点开后黑底全屏，同楼层图片左右切换，支持双击和双指缩放、放大后平移，返回保持阅读位置。
+
+0.2.1 参考实际手机上的酷安鸿蒙版阅读布局。帖子详情使用原生 NavDestination 的56vp作者/话题双行吸顶标题，系统负责避让，标题内容使用系统材质；底部左侧“写回复”胶囊一次进入编辑器，右侧 HdsActionBar 提供楼层、回顶与收放控制。向下阅读时回复入口淡出收窄，右侧保留原生主按钮；反向滚动或点按可展开。移除常驻末尾留白，末尾继续上拉时才浮现带回顶入口的提示，松手弹回并保留约3.2秒后淡出。从尾部分页返回顶部会恢复真实首楼和标题，长首楼也可使用回顶。按钮接入系统沉浸材质，外观等级继续生效；减少动态效果时保持阅读操作栏展开并停止弹簧动效。
+
+首页、分类、搜索和我的使用 AdaptiveNavigationBar 主导航：向下浏览时，同一个材质胶囊连续收拢为右下当前页图标按钮；反向滚动或点击按钮连续展开为四个页签。表面与图标节点保持，文字随收拢渐隐，列表阅读位置保持。开启减少动态效果或高对比时，主导航保持展开。
 
 ## 应用图标
 
@@ -49,16 +53,18 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 ## 鸿蒙 7 原生设计
 
-使用 `HdsNavigation` / `HdsTabs` 的悬浮胶囊页签和系统符号；内容面板保持清晰，沉浸式材质用于导航、阅读工具栏、设置控件和确认弹窗。预览中的背景是独立静态 SVG，真实光感来自 API 26 的 `uiMaterial.ImmersiveMaterial`。
+使用 `HdsNavigation` 组织页面、`HdsTabs` 切换主页面内容、原生 `NavDestination` 提供56vp帖子标题栏并由系统避让安全区；标题内容通过 `systemMaterial` 接入系统材质。底部主导航由 AdaptiveNavigationBar 呈现。内容面板保持清晰，沉浸式材质用于导航、阅读工具栏、设置控件和确认弹窗。预览中的背景是独立静态 SVG，真实光感来自 API 26 的 `uiMaterial.ImmersiveMaterial`。
 
-| 等级 | 控件系统材质 | HDS 导航 |
-| --- | --- | --- |
-| 关闭 | 实色、`Material.empty` | `NONE`，同时关闭旧背景模糊 |
-| 轻柔 | `REGULAR`，无阴影/交互形变/触摸光感 | `SMOOTH` |
-| 标准 | `REGULAR`、系统阴影、触摸光感 | `GENTLE` |
-| 丰富 | `THIN`、系统阴影、形变及触摸光感 | `EXQUISITE` |
+主导航常驻同一个材质 Stack 和四个稳定 key 的图标节点，由一个弹簧 progress 连续驱动表面宽高、位置、图标位移与文字透明度。HdsTabs 的 barHeight 为0，仅保留内容切换；收放由同一表面完成。交互取自实际手机上的酷安鸿蒙版观察，参考截图只保留在本机，未复制其源码、图标或媒体资源。
 
-高对比覆盖材质选择。减少动态关闭控件形变/触摸光效、导航材质及页签切换动画，不宣称停止帖子 GIF。设备不支持时使用实色界面；HDS 热调控保持开启。设备本身的 `getGlobalMaterialLevel()` 不可修改，本应用不会改变它。
+| 等级 | 控件、主导航与标题内容的系统材质 |
+| --- | --- |
+| 关闭 | 实色、`Material.empty` |
+| 轻柔 | `REGULAR`，无阴影/交互形变/触摸光感 |
+| 标准 | `REGULAR`、系统阴影、触摸光感 |
+| 丰富 | `THIN`、系统阴影、形变及触摸光感 |
+
+高对比覆盖材质选择。减少动态关闭控件形变/触摸光效及页签切换动画，并让主导航静态展开，不宣称停止帖子 GIF。设备不支持时使用实色界面。设备本身的 `getGlobalMaterialLevel()` 不可修改，本应用不会改变它。
 
 [华为设计规范](https://developer.huawei.com/consumer/cn/design/) · [HarmonyOS 7 / API 26 升级指导](https://developer.huawei.com/consumer/en/doc/harmonyos-releases/upgrade-adaptation) · [官方沉浸光感方案](https://developer.huawei.com/consumer/cn/doc/guidebook/solution-0000002784570841)
 
@@ -95,7 +101,7 @@ npm install --prefix .local-test-runtime --no-save --package-lock=false --ignore
 DEVECO_TYPESCRIPT_PATH="$PWD/.local-test-runtime/node_modules/typescript/lib/typescript.js" node --test tests/*.test.mjs
 ```
 
-GitHub Actions 使用相同的 TypeScript 4.9.5 和 Node 22 运行64项 fixture；测试只读取源码和编译运行时，不访问真实论坛或设备存储。它不编译 ArkUI、不登录论坛，不替代 SDK 编译及设备验收。
+GitHub Actions 使用相同的 TypeScript 4.9.5 和 Node 22 运行81项 fixture；测试只读取源码和编译运行时，不访问真实论坛或设备存储。它不编译 ArkUI、不登录论坛，不替代 SDK 编译及设备验收。
 
 本机 `app/build-profile.json5` 不进入 Git；仓库提供无凭据的 `build-profile.example.json5`，首次执行 build.sh 会复制模板。需要安装到自己的设备时，以自己的开发者账号生成包含目标设备的调试签名：
 
@@ -113,6 +119,8 @@ macOS 上如遇 CLI 把已有镜像误判未下载，可用 `./scripts/start-emu
 - 完整 SDK 编译、调试签名、安装、启动通过；模拟器 HDC 地址 `127.0.0.1:5555`，API 26 Release。
 - 本地测试读取实际 .ets：响应映射、权限缺省、分页、通知口径、Unicode 简评、写 payload、401/403/429、取消、账号切换、图片隔离和认证域名。
 - 已看到真实服务器最新话题，未使用模拟帖子填充应用。
+- 0.2.1 的81项离线回归通过；最终版主导航收拢、点击展开与正文滚动已在模拟器观察。帖子末尾继续上拉反馈、尾部分页回首楼等阅读控制有模拟器记录与方法回归。
+- Pura X View / HarmonyOS 7 真机用于观察酷安鸿蒙版7.1.1的实际交互；本客户端的新增界面验收仍在模拟器完成，尚未获得本客户端真机光感或功耗结果。
 - GitHub 认证入口已实测跳转成功；用户完成授权后，原生个人页确认会话有效，重启后仍可读取真实帖子。搜索“鸿蒙”已返回真实结果。
 - 本次没有代用户发帖、上传、删除或改变通知已读状态。服务器写操作、第二账号切换及物理设备光感表现尚未端到端验证，详见验收记录。
 - `devecocli check lint` 当前返回 Files checked:0，不能作为 lint 有效通过；静态依据是 SDK 编译。

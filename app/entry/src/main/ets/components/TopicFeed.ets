@@ -12,6 +12,8 @@ export struct TopicFeed {
   @Param reloadSignal: number = 0;
   @Param active: boolean = true;
   @Param appearance: AppearanceSettings = new AppearanceSettings();
+  @Param listScroller: Scroller = new Scroller();
+  @Event onReadScroll: (offset: number, state: ScrollState, source: ScrollSource) => void = (): void => {};
   @Event onOpenTopic: (id: number, postNumber: number) => void = (): void => {};
   @Event onVerify: () => void = (): void => {};
   @Event onNotifications: () => void = (): void => {};
@@ -80,7 +82,7 @@ export struct TopicFeed {
 
   build() {
     Refresh({ refreshing: this.refreshing }) {
-      List({ space: 6 }) {
+      List({ scroller: this.listScroller, space: 6 }) {
         if (this.categoryId === 0) {
           ListItem() {
             Row({ space: 12 }) {
@@ -122,7 +124,8 @@ export struct TopicFeed {
         }
       }.width('100%').height('100%').padding({ left: 14, right: 14 }).id('topic_feed_list')
         .contentEndOffset(this.categoryId > 0 ? 12 : 92)
-        .scrollBar(BarState.Off).onReachEnd(() => { if (this.loaded && this.hasMore && !this.busy && !this.error) { void this.load(false); } })
+        .scrollBar(BarState.Off).onWillScroll(this.onReadScroll)
+        .onReachEnd(() => { if (this.loaded && this.hasMore && !this.busy && !this.error) { void this.load(false); } })
     }.width('100%').height('100%').onRefreshing(() => { this.refreshing = true; void this.load(true); })
       .onAppear(() => { if (!this.loaded) { void this.load(true); } this.configureTimer(); })
       .onDisAppear(() => { this.request?.cancel(); if (this.autoTimer >= 0) { clearInterval(this.autoTimer); this.autoTimer = -1; } })

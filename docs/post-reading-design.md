@@ -1,13 +1,32 @@
-# 帖子阅读交互（0.2.0）
+# 帖子阅读交互（0.2.1）
 
-参考[贴吧官方 App Store 页面](https://apps.apple.com/cn/app/id477927812)中的帖文详情截图，采用作者信息、标题正文、大图、低干扰操作与固定回复入口的层级。楼中楼浅底预览、全屏画廊和缩放为本项目的交互设计，不宣称完整复刻或已实测当前贴吧的所有手势。
+0.2.1参考实际手机上的酷安鸿蒙版7.1.1（com.coolapk.hmclient）：通过HDC观察用户Pura X View / HarmonyOS 7 / API 26的真实界面，采用顶部作者信息、自然铺开的正文与底部左侧评论入口、右侧常用动作组。酷安向下长滑时隐藏整条导航、反向滚动复原；本项目结合用户要求保留单按钮收起形态。参考截图只留在本机被忽略的artifacts目录，未复制酷安源码、图标或媒体资源。
+
+0.2.0的阅读层级曾参考[贴吧官方 App Store 页面](https://apps.apple.com/cn/app/id477927812)截图。现有楼中楼、全屏画廊和缩放继续由本项目原生实现，不宣称完整复刻参考客户端。
 
 ## 页面层级
 
-- 作者头像、楼主标记、楼层；主楼标题在作者下方，正文满宽。
+- 原生NavDestination提供56vp作者/话题双行吸顶标题，系统负责避让；标题内容显示作者与截断话题名，通过systemMaterial按外观等级应用系统材质。
+- 主楼保留作者头像、楼主标记、楼层与完整标题，正文满宽。
 - 回复连续排列并用细分隔线区分，楼中楼内缩且用浅底呈现，三条预览与展开收起保留真实树形语义。
 - 喜欢及回复常用操作在正文后；长按喜欢选择其他回应，更多菜单按真实权限提供编辑、删除、简评及解决方案。
-- 固定底部回复入口与楼层跳转。关闭/归档或无回复权限时明确说明原因。
+- 底部左侧“写回复”胶囊一次进入编辑器，右侧HdsActionBar提供楼层、回顶与展开收起控制。关闭、归档或无回复权限时禁用回复，并通过文字和无障碍标签说明状态。
+
+## 阅读动效
+
+使用官方有主按钮的 HdsActionBar 展开/收缩动效。向话题尾部累计滚动32vp后收缩，左侧写回复入口同步淡出并收窄；反向回读16vp后展开，点击浮动主按钮也可手动恢复。浮层不改变列表视口高度，避免收缩时跳动。按钮的ButtonModifier接入系统沉浸光感材质，背板透明且关闭额外模糊，避免重复叠加。开启减少动态效果时移除收缩主按钮，写回复、楼层与回顶保持静态可见。
+
+末尾不保留静态提示区。List启用末端Spring回弹；onWillScroll只有在真实话题加载完成、没有下一页且用户到末尾继续上拉时才跟手显示提示。单纯触底、程序滚动、惯性和回弹不触发提示；松手后使用springMotion回归，保留约3.2秒后淡出。提示带回顶按钮，工具栏也提供回顶，长首楼同样可用。尾部分页模式下重新加载首批楼层，完整首批内容已在列表中时平滑滚到标题。看图、换账号、重新加载或离开页面清理提示及定时器。
+
+标题接口依据本机API26 SDK的nav_destination.d.ts:622：NavDestination.title支持NavDestinationCustomTitle，其中builder提供标题内容、height设置标题栏高度。本项目使用title({ builder: readerTitle, height: 56 })，系统负责安全区避让，标题内容使用systemMaterial。工具栏与动效依据HdsActionBar.d.ets及官方文档[有主按钮的核心操作栏](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/ui-design-actionbar-main-buttons)、[滚动组件通用接口](https://developer.huawei.com/consumer/cn/doc/harmonyos-references/ts-container-scrollable-common)和[弹簧曲线](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/arkts-spring-curve)。没有替换论坛分页、身份或权限实现。
+
+## 主页面导航
+
+首页、分类、搜索和我的使用常驻AdaptiveNavigationBar。向下浏览时，同一个材质表面收拢为右下当前页图标按钮；反向浏览或点击按钮展开为完整页签。表面使用materialFor系统材质，四个图标节点使用稳定key，收拢与展开共享一个弹簧progress：表面宽高与位置、图标位移和文字透明度连续变化。开启减少动态效果或高对比时主导航保持静态展开。
+
+HdsTabs仅负责主页面内容切换，barHeight设为0。四页保留独立Scroller和原始阅读偏移，只有当前主页面的用户滚动参与方向累计；网页认证、子路由或程序滚动不收起主导航。AdaptiveNavigationBar从完整胶囊到单按钮都使用同一个Stack，图标节点持续存在。
+
+最终版完整SDK构建和安装通过，模拟器已观察到主栏收拢和点击展开，正文仍可正常滚动。主导航控制有4项离线回归，变形几何另有4项回归；总计81项测试通过。Pura X View仅用于观察酷安，本客户端仍以模拟器验收；没有新增本客户端物理设备光感或功耗结论。
 
 ## 图片
 

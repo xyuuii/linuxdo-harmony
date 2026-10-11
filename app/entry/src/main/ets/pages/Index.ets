@@ -9,8 +9,9 @@ import { forumSession } from '../models/ForumSession';
 import { forumApi, BrowserRequest, RequestCancellation, BrowserResponse } from '../services/ForumApi';
 import { BrowserTransportAdapter } from '../services/BrowserTransportAdapter';
 import { allowedLoginNavigation, loginOrigin, loginPageTitle } from '../services/AuthNavigation';
-import { tabMaterialFor } from '../services/MaterialPolicy';
+import { TopicScrollPolicy } from '../services/TopicScrollPolicy';
 import { TopicFeed } from '../components/TopicFeed';
+import { AdaptiveNavigationBar } from '../components/AdaptiveNavigationBar';
 import { CategoriesPage } from './CategoriesPage';
 import { SearchPage } from './SearchPage';
 import { ProfilePage } from './ProfilePage';
@@ -49,15 +50,59 @@ struct Index {
   @Local browserTitle: string = 'LINUX DO 登录与验证';
   @Local authPopupController: webview.WebviewController | undefined = undefined;
   @Local showAuthPopup: boolean = false;
+  @Local navigationCollapsed: boolean = false;
+  @Local mainPageVisible: boolean = true;
   @Local authPopupOrigin: string = '正在打开认证页面';
   @Local authPopupTitle: string = '认证登录';
   @Local authPopupError: string = '';
   private controller: HdsTabsController = new HdsTabsController();
+  private readonly latestScroller: Scroller = new Scroller();
+  private readonly categoriesScroller: Scroller = new Scroller();
+  private readonly searchScroller: Scroller = new Scroller();
+  private readonly profileScroller: Scroller = new Scroller();
+  private readonly navigationScrollPolicy: TopicScrollPolicy = new TopicScrollPolicy();
   private webController: webview.WebviewController = new webview.WebviewController();
   private browserAdapter: BrowserTransportAdapter = new BrowserTransportAdapter(this.webController);
   private webAttached: boolean = false;
   private initialized: boolean = false;
   private loginOwnerId: number = 0;
+
+  private navigationScroller(index: number): Scroller {
+    if (index === 1) { return this.categoriesScroller; }
+    if (index === 2) { return this.searchScroller; }
+    if (index === 3) { return this.profileScroller; }
+    return this.latestScroller;
+  }
+
+  private setNavigationCollapsed(collapsed: boolean): void {
+    if (collapsed && (this.appearance.reduceMotion || this.appearance.highContrast)) { return; }
+    if (this.navigationCollapsed === collapsed) { return; }
+    this.navigationCollapsed = collapsed;
+  }
+
+  private resetNavigation(): void {
+    this.navigationScrollPolicy.reset();
+    this.setNavigationCollapsed(false);
+  }
+
+  private rootVisibilityChanged(visible: boolean): void {
+    this.mainPageVisible = visible;
+    if (visible) { this.resetNavigation(); }
+  }
+
+  private readNavigationScroll(index: number, offset: number, _state: ScrollState, source: ScrollSource): void {
+    if (index !== this.currentIndex) { return; }
+    const blocked: boolean = !this.mainPageVisible || this.showBrowser || this.paths.size() > 0 ||
+      this.appearance.reduceMotion || this.appearance.highContrast;
+    const userDriven: boolean = source === ScrollSource.DRAG || source === ScrollSource.FLING ||
+      source === ScrollSource.OTHER_USER_INPUT;
+    const expanded: boolean | undefined = this.navigationScrollPolicy.update(offset, userDriven,
+      this.navigationScroller(index).currentOffset().yOffset <= 1, blocked);
+    if (expanded !== undefined) { this.setNavigationCollapsed(!expanded); }
+  }
+
+  @Monitor('appearance.reduceMotion', 'appearance.highContrast')
+  navigationAccessibilityChanged(): void { this.resetNavigation(); }
 
   @Monitor('appearance.themeMode')
   themeChanged(): void { this.applyTheme(); }
@@ -81,11 +126,17 @@ struct Index {
     } catch {}
   }
 
+  private pushRoute(name: string, route: ForumRoute): void {
+    this.mainPageVisible = false;
+    this.paths.pushPath({ name: name, param: route });
+  }
+
   private openTopic(id: number, postNumber: number): void {
     if (!Number.isSafeInteger(id) || id <= 0) { return; }
+    this.resetNavigation();
     const route: ForumRoute = new ForumRoute();
     route.topicId = id; route.postNumber = Math.max(1, postNumber);
-    this.paths.pushPath({ name: 'topic', param: route });
+    this.pushRoute('topic', route);
   }
 
   private compose(topicId: number, replyTo: number, postId: number, returnTopic: ForumRoute): void {
@@ -93,26 +144,30 @@ struct Index {
     const route: ForumRoute = new ForumRoute();
     route.topicId = topicId; route.replyTo = replyTo; route.postId = postId;
     route.returnTopic = returnTopic;
-    this.paths.pushPath({ name: 'composer', param: route });
+    this.pushRoute('composer', route);
   }
 
   private openLogin(): void {
+    this.resetNavigation();
     this.loginOwnerId = forumSession.user?.id || 0;
-    this.paths.pushPath({ name: 'login', param: new ForumRoute() });
+    this.pushRoute('login', new ForumRoute());
   }
   private openNotifications(): void {
     if (forumSession.user === undefined) { this.openLogin(); return; }
-    this.paths.pushPath({ name: 'notifications', param: new ForumRoute() });
+    this.resetNavigation();
+    this.pushRoute('notifications', new ForumRoute());
   }
   private openCategory(category: Category): void {
+    this.resetNavigation();
     const route: ForumRoute = new ForumRoute();
     route.categoryId = category.id; route.categorySlug = category.slug; route.categoryName = category.name;
-    this.paths.pushPath({ name: 'category', param: route });
+    this.pushRoute('category', route);
   }
   private openProfile(section: ProfileSection): void {
     if (section === ProfileSection.Notifications) { this.openNotifications(); return; }
+    this.resetNavigation();
     const route: ForumRoute = new ForumRoute(); route.section = section;
-    this.paths.pushPath({ name: 'profile', param: route });
+    this.pushRoute('profile', route);
   }
 
   private authenticated(): void {
@@ -123,6 +178,7 @@ struct Index {
 
   private openBrowser(): void {
     if (!this.webAttached) { this.getUIContext().getPromptAction().showToast({ message: '网页登录正在准备，请稍后重试' }); return; }
+    this.resetNavigation();
     forumApi.setBrowserTransportEnabled(false);
     forumSession.stopPolling();
     this.browserError = ''; this.showBrowser = true;
@@ -260,30 +316,58 @@ struct Index {
         HdsTabs({ controller: this.controller, index: this.currentIndex }) {
           TabContent() {
             TopicFeed({ appearance: this.appearance, reloadSignal: this.dataVersion + forumSession.revision,
+              listScroller: this.latestScroller,
+              onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
+                this.readNavigationScroll(0, offset, state, source);
+              },
               active: this.currentIndex === 0 && !this.showBrowser && this.paths.size() === 0,
               onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); },
               onVerify: (): void => { this.openBrowser(); }, onNotifications: (): void => { this.openNotifications(); } })
           }.tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.house')) }, '最新'))
           TabContent() {
             CategoriesPage({ reloadSignal: this.dataVersion + forumSession.revision,
+              listScroller: this.categoriesScroller,
+              onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
+                this.readNavigationScroll(1, offset, state, source);
+              },
               onOpenCategory: (category: Category): void => { this.openCategory(category); }, onVerify: (): void => { this.openBrowser(); } })
           }.tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.square_grid_2x2')) }, '分类'))
           TabContent() {
             SearchPage({ reloadSignal: this.dataVersion + forumSession.revision,
+              listScroller: this.searchScroller,
+              onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
+                this.readNavigationScroll(2, offset, state, source);
+              },
               onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); }, onVerify: (): void => { this.openBrowser(); } })
           }.tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.magnifyingglass')) }, '搜索'))
           TabContent() {
-            ProfilePage({ onLogin: (): void => { this.openLogin(); }, onOpenSection: (section: ProfileSection): void => { this.openProfile(section); },
-              onSettings: (): void => { this.paths.pushPath({ name: 'settings', param: new ForumRoute() }); },
-              onDiagnostics: (): void => { this.paths.pushPath({ name: 'about', param: new ForumRoute() }); },
+            ProfilePage({ listScroller: this.profileScroller,
+              onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
+                this.readNavigationScroll(3, offset, state, source);
+              },
+              onLogin: (): void => { this.openLogin(); }, onOpenSection: (section: ProfileSection): void => { this.openProfile(section); },
+              onSettings: (): void => { this.resetNavigation(); this.pushRoute('settings', new ForumRoute()); },
+              onDiagnostics: (): void => { this.resetNavigation(); this.pushRoute('about', new ForumRoute()); },
               onLoggedOut: (): void => { this.paths.clear(); this.dataVersion++; } })
           }.tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.person')) }, '我的'))
-        }.width('100%').height('100%').barPosition(BarPosition.End).barOverlap(true)
-          .barBackgroundBlurStyle(BlurStyle.NONE).barBackgroundColor($r('app.color.surface'))
-          .barFloatingStyle({ barBottomMargin: 12, thermoCtrl: true, systemMaterialEffect: tabMaterialFor(this.appearance) })
-          .animationDuration(this.appearance.reduceMotion ? 0 : 240).onChange((index: number) => { this.currentIndex = index; })
+        }.width('100%').height('100%').barPosition(BarPosition.End).barOverlap(true).vertical(false).barHeight(0)
+          .barBackgroundBlurStyle(BlurStyle.NONE).barBackgroundColor(Color.Transparent)
+          .animationDuration(this.appearance.reduceMotion ? 0 : 240).onChange((index: number) => {
+            this.currentIndex = index;
+            this.resetNavigation();
+          })
       }.width('100%').height('100%').mode(NavigationMode.Stack).hideTitleBar(true).hideToolBar(true)
         .navDestination(this.destination).backgroundColor($r('app.color.page_background'))
+        .onNavBarStateChange((visible: boolean): void => { this.rootVisibilityChanged(visible); })
+
+      AdaptiveNavigationBar({ currentIndex: this.currentIndex, collapsed: this.navigationCollapsed,
+        appearance: this.appearance,
+        onSelect: (index: number): void => {
+          this.resetNavigation(); this.currentIndex = index; this.controller.changeIndex(index);
+        },
+        onExpand: (): void => { this.resetNavigation(); } })
+        .visibility(this.mainPageVisible && !this.showBrowser ? Visibility.Visible : Visibility.Hidden)
+        .hitTestBehavior(HitTestMode.Transparent).zIndex(2)
 
       Column({ space: 8 }) {
         Row({ space: 12 }) {

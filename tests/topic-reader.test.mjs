@@ -43,22 +43,30 @@ function load(value, bindings = {}) {
 const topicSource = source('pages/TopicPage');
 const richSource = source('components/RichPostContent');
 const rich = load(extract(richSource, 'export interface PostInline', '@ComponentV2'));
+const scroll = load(source('services/TopicScrollPolicy'));
+const ScrollSource = { NONE: 0, DRAG: 1, FLING: 2, OTHER_USER_INPUT: 3, SCROLLER: 4, SCROLLER_ANIMATION: 5 };
+const ScrollState = { Idle: 0, Scroll: 1, Fling: 2 };
 const declarations = extract(topicSource, 'export interface TopicTreeRow', '@ComponentV2');
 const prefix = extract(topicSource, 'export struct TopicPage', '  @Builder\n');
 // Include the actual viewer-close and native-Back closures from build(), so the
 // tests exercise the same closing paths while avoiding ArkUI builder syntax.
 const close = /onClose: \(\): void => \{([^\n]*)\}/.exec(topicSource);
 const back = /\.onBackPressed\(\(\): boolean => \{([^\n]*)\}/.exec(topicSource);
-assert.ok(close && back, 'Production viewer-close and native-Back handlers must remain extractable.');
-const pageClass = (prefix + `\ncloseFromViewer(): void {${close[1]}}\nbackFromViewer(): boolean {${back[1]}}\n}\n`)
+const hide = /\.onHidden\(\(\) => \{([\s\S]*?)\}\)/.exec(topicSource);
+assert.ok(close && back && hide, 'Production viewer-close, native-Back and navigation-hide handlers must remain extractable.');
+const pageClass = (prefix + `\ncloseFromViewer(): void {${close[1]}}\nbackFromViewer(): boolean {${back[1]}}` +
+  `\nhideFromNavigation(): void {${hide[1]}}\n}\n`)
   .replace('export struct TopicPage', 'export class TopicPage')
   .replace(/^\s*@(?:Computed|Monitor\([^\n]*\))\s*\n/gm, '\n')
   .replace(/@(Param|Event|Local) /g, '');
 
 function readerRuntime() {
   const timers = [];
+  const cancelledTimers = [];
+  let timerId = 0;
   const reads = [];
   const bars = [];
+  const animations = [];
   const session = { user: { id: 7 }, revision: 1 };
   const prohibited = () => { throw new Error('Native I/O is prohibited in reader method tests.'); };
   const exports = load(declarations + '\n' + pageClass, {
@@ -66,6 +74,10 @@ function readerRuntime() {
     loadAppearanceSettings: () => ({}),
     parsePostContent: rich.parsePostContent,
     postContentUrl: rich.postContentUrl,
+    ...scroll,
+    ScrollSource,
+    ScrollState,
+    curves: { springMotion: (...args) => ({ spring: args }) },
     forumApi: { fetchTopic: prohibited, fetchPosts: prohibited, getUserAgent: prohibited },
     http: { createHttp: prohibited }, fileIo: { open: prohibited },
     picker: { DocumentViewPicker: prohibited },
@@ -76,22 +88,32 @@ function readerRuntime() {
       captures = 0;
       restores = [];
       indexCalls = [];
+      atEnd = false;
       currentOffset() { this.captures++; return { ...this.offset }; }
+      isAtEnd() { return this.atEnd; }
       scrollTo(value) { this.restores.push(value); this.offset = { xOffset: value.xOffset, yOffset: value.yOffset }; }
       scrollToIndex(...args) { this.indexCalls.push(args); }
     },
     ScrollAlign: { START: 'start' },
     window: { getLastWindow: async () => ({ setWindowSystemBarProperties: async value => { bars.push(value); } }) },
     $r: id => ({ id }),
-    setTimeout(callback, delay) { timers.push({ callback, delay }); return timers.length; }
+    setTimeout(callback, delay) { const id = ++timerId; timers.push({ id, callback, delay }); return id; },
+    clearTimeout(id) {
+      cancelledTimers.push(id);
+      const index = timers.findIndex(timer => timer.id === id);
+      if (index >= 0) { timers.splice(index, 1); }
+    }
   });
   const page = new exports.TopicPage();
-  page.getUIContext = () => ({ getHostContext: () => ({
-    resourceManager: { getColorSync: id => id.endsWith('page_background') ? 0xfff4f5f8 : 0xff11151d }
-  }) });
+  page.getUIContext = () => ({
+    getHostContext: () => ({
+      resourceManager: { getColorSync: id => id.endsWith('page_background') ? 0xfff4f5f8 : 0xff11151d }
+    }),
+    animateTo(options, callback) { animations.push(options); callback(); options.onFinish?.(); }
+  });
   page.reload = number => { reads.push(number); };
   const layout = () => { while (timers.length > 0) { timers.shift().callback(); } };
-  return { page, session, timers, reads, bars, layout };
+  return { page, session, timers, cancelledTimers, reads, bars, animations, layout };
 }
 
 function imagePost(id, cooked) {
@@ -246,4 +268,118 @@ test('stable floor rows update collapse, expansion and reactions in place withou
   assert.equal(rowKey(retained), retainedKey, 'Reaction updates must not remount the floor by changing its key.');
   assert.equal(localInput.get(rowKey(retained)).boostDraft, '未发送的简评');
   assert.equal(reloads, 4);
+});
+
+function endedTopic(page) {
+  page.topic = { postStream: { stream: [1, 2] }, canReply: true, closed: false, archived: false };
+  page.posts = [imagePost(1, '<p>original</p>'), imagePost(2, '<p>tail</p>')];
+  page.sliceEnd = 1;
+  page.consumed = [1, 2];
+  page.scroller.offset.yOffset = 800;
+}
+
+test('end feedback requires a new upward DRAG after the true topic end, never arrival, FLING or a programmatic scroll', () => {
+  const { page, timers, animations } = readerRuntime();
+  endedTopic(page);
+  assert.equal(page.topicEnded, true);
+  page.readScroll(80, ScrollState.Scroll, ScrollSource.DRAG);
+  page.scroller.atEnd = true;
+  page.settleReaderScroll();
+  assert.equal(page.endFeedbackProgress, 0, 'First arrival at the last item is not an extra upward pull.');
+  assert.equal(page.endHintTimer, 0);
+  for (const [state, source] of [
+    [ScrollState.Scroll, ScrollSource.SCROLLER], [ScrollState.Scroll, ScrollSource.SCROLLER_ANIMATION],
+    [ScrollState.Scroll, ScrollSource.FLING], [ScrollState.Fling, ScrollSource.FLING],
+    [ScrollState.Fling, ScrollSource.DRAG], [ScrollState.Scroll, ScrollSource.OTHER_USER_INPUT]
+  ]) {
+    page.readScroll(40, state, source);
+    assert.equal(page.endFeedbackProgress, 0);
+    assert.equal(page.endHintTimer, 0);
+  }
+  page.readScroll(16, ScrollState.Scroll, ScrollSource.DRAG);
+  assert.equal(page.endFeedbackProgress, 0.25);
+  page.readScroll(48, ScrollState.Scroll, ScrollSource.DRAG);
+  assert.equal(page.endFeedbackProgress, 1);
+  page.settleReaderScroll();
+  assert.equal(timers.at(-1).delay, 3200);
+  assert.ok(animations.length > 0);
+  page.readScroll(-1, ScrollState.Scroll, ScrollSource.DRAG);
+  assert.equal(page.endFeedbackProgress, 0, 'Reading upwards dismisses the hint and its timer.');
+  assert.equal(page.endHintTimer, 0);
+  assert.deepEqual(timers, []);
+
+  for (const preventEnd of [
+    reader => { reader.topic = undefined; },
+    reader => { reader.posts = []; },
+    reader => { reader.topic.postStream.stream.push(3); },
+    reader => { reader.loading = true; },
+    reader => { reader.error = 'fixture read failure'; }
+  ]) {
+    const { page: reader } = readerRuntime();
+    endedTopic(reader);
+    reader.scroller.atEnd = true;
+    preventEnd(reader);
+    assert.equal(reader.topicEnded, false);
+    reader.readScroll(64, ScrollState.Scroll, ScrollSource.DRAG);
+    assert.equal(reader.endFeedbackProgress, 0);
+    assert.equal(reader.endHintTimer, 0);
+  }
+});
+
+test('return to top reloads the initial slice when only a retained root remains, otherwise scrolls to the exact origin', () => {
+  const { page, reads } = readerRuntime();
+  endedTopic(page);
+  page.sliceStart = 30;
+  page.currentNumber = 48;
+  page.posts = [imagePost(1, '<p>retained root</p>'), imagePost(48, '<p>tail</p>')];
+  page.backToTopicTop();
+  assert.deepEqual(reads, [1], 'A retained original post does not supply its omitted first-page replies.');
+  assert.deepEqual(page.scroller.restores, [], 'The tail window must reload before positioning the reader.');
+
+  for (const reduceMotion of [false, true]) {
+    const { page: head, reads: headReads } = readerRuntime();
+    endedTopic(head);
+    head.appearance.reduceMotion = reduceMotion;
+    head.sliceStart = 0;
+    head.currentNumber = 2;
+    head.highlightedId = 2;
+    head.backToTopicTop();
+    assert.deepEqual(headReads, []);
+    assert.equal(head.currentNumber, 1);
+    assert.equal(head.highlightedId, 0);
+    assert.equal(head.scroller.restores.length, 1);
+    const restored = head.scroller.restores[0];
+    assert.equal(restored.xOffset, 0);
+    assert.equal(restored.yOffset, 0);
+    if (reduceMotion) { assert.equal(restored.animation, false); }
+    else { assert.ok(restored.animation.curve, 'Normal-motion return uses the native animation curve.'); }
+  }
+});
+
+test('leaving the reader, opening an image and switching accounts cancel the end-hint timer and clear feedback', () => {
+  for (const leave of ['navigation', 'picture', 'account']) {
+    const { page, session, timers, cancelledTimers, layout } = readerRuntime();
+    endedTopic(page);
+    page.scroller.atEnd = true;
+    page.readScroll(32, ScrollState.Scroll, ScrollSource.DRAG);
+    page.settleReaderScroll();
+    const pendingTimer = page.endHintTimer;
+    assert.ok(pendingTimer > 0);
+    assert.ok(timers.some(timer => timer.id === pendingTimer));
+    if (leave === 'navigation') { page.hideFromNavigation(); assert.equal(page.hidden, true); }
+    else if (leave === 'picture') { page.picture('/uploads/fullscreen.png'); assert.equal(page.showPicture, true); }
+    else {
+      session.user = { id: 9 };
+      session.revision++;
+      page.accountChanged();
+      assert.equal(page.toolbarExpanded, true);
+    }
+    assert.equal(page.endHintTimer, 0);
+    assert.equal(page.endFeedbackProgress, 0);
+    assert.equal(page.endPullDistance, 0);
+    assert.ok(cancelledTimers.includes(pendingTimer));
+    assert.ok(!timers.some(timer => timer.id === pendingTimer));
+    layout();
+    assert.equal(page.endFeedbackProgress, 0, 'A cancelled callback must not revive a hidden or former-account hint.');
+  }
 });

@@ -9,6 +9,8 @@ interface ProfileMenuItem { id: ProfileSection; title: string; subtitle: string;
 @ComponentV2
 export struct ProfilePage {
   @Param appearance: AppearanceSettings = loadAppearanceSettings();
+  @Param listScroller: Scroller = new Scroller();
+  @Event onReadScroll: (offset: number, state: ScrollState, source: ScrollSource) => void = (): void => {};
   @Event onLogin: () => void = (): void => {};
   @Event onOpenSection: (section: ProfileSection) => void = (): void => {};
   @Event onSettings: () => void = (): void => {};
@@ -28,7 +30,7 @@ export struct ProfilePage {
   }
 
   build() {
-    Scroll() {
+    Scroll(this.listScroller) {
       Column({ space: 22 }) {
         Text('我的').fontSize(32).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary')).width('100%')
         Row({ space: 16 }) {
@@ -87,5 +89,8 @@ export struct ProfilePage {
       }.width('100%').constraintSize({ maxWidth: 640 }).alignItems(HorizontalAlign.Start)
         .padding({ left: 20, right: 20, top: 24, bottom: 112 })
     }.width('100%').height('100%').scrollBar(BarState.Off)
+      .onWillScroll((_x: number, y: number, state: ScrollState, source: ScrollSource): void => {
+        this.onReadScroll(y, state, source);
+      })
   }
 }
