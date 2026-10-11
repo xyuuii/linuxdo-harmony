@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.xyuuii.linuxdo.harmony",
     "vendor": "xyuuii",
-    "versionCode": 203,
-    "versionName": "0.2.3",
+    "versionCode": 204,
+    "versionName": "0.2.4",
     "icon": "$media:layered_image",
     "label": "$string:app_name"
   }

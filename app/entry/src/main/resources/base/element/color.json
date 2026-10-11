@@ -43,6 +43,22 @@
     {
       "name": "error",
       "value": "#A2362C"
+    },
+    {
+      "name": "reading_glass_tint",
+      "value": "#B3FFFFFF"
+    },
+    {
+      "name": "reading_glass_highlight",
+      "value": "#8FFFFFFF"
+    },
+    {
+      "name": "reading_glass_rim",
+      "value": "#D9FFFFFF"
+    },
+    {
+      "name": "reading_glass_shadow",
+      "value": "#24112440"
     }
   ]
 }

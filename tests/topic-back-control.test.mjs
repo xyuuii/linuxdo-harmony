@@ -62,7 +62,7 @@ function runtime() {
   }
   const { TopicPage } = load(declarations + '\n' + page, {
     forumSession: { user: { id: 7 }, revision: 1 }, loadAppearanceSettings: () => appearance,
-    TopicScrollPolicy, ActionBarButton, ButtonModifier, Scroller,
+    TopicScrollPolicy, ActionBarButton, ButtonModifier, Scroller, Color: { Transparent: 'transparent' },
     LengthMetrics: { vp: value => value }, ColorMetrics: { resourceColor: value => value },
     $r: id => ({ id }), Edge: { Top: 'top' },
     materialFor(settings) {

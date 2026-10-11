@@ -1,3 +1,4 @@
+import { ReaderGlassSurface } from '../components/ReaderGlassSurface';
 import { common } from '@kit.AbilityKit';
 import { window, curves, ButtonModifier, LengthMetrics, ColorMetrics } from '@kit.ArkUI';
 import { HdsActionBar, ActionBarButton, ActionBarStyle, BlurStrategy } from '@kit.UIDesignKit';
@@ -434,6 +435,7 @@ export struct TopicPage {
     if (this.backTopButton === undefined) {
       this.backTopButton = new ActionBarButton({
         baseIcon: $r('sys.symbol.arrow_up_to_line'), id: 'topic_back_to_top', width: LengthMetrics.vp(44),
+        shadowStyle: { radius: 0, color: Color.Transparent },
         enabled: false, accessibilityText: '回到话题顶部', hoverTips: '回到话题顶部',
         onClick: (): void => { this.backToTopicTop(); }
       });
@@ -651,7 +653,7 @@ export struct TopicPage {
   }
 
   private controlModifier(): ButtonModifier {
-    return new ButtonModifier().backgroundColor($r('app.color.surface'))
+    return new ButtonModifier().backgroundColor(Color.Transparent)
       .systemMaterial(materialFor(this.appearance));
   }
 
@@ -1088,49 +1090,64 @@ export struct TopicPage {
   @Builder
   readerToolbar() {
     Row({ space: 8 }) {
-      Button({ type: ButtonType.Capsule, buttonStyle: ButtonStyleMode.NORMAL }) {
-        Row({ space: 8 }) {
-          SymbolGlyph($r('sys.symbol.message')).fontSize(18).fontColor([$r('app.color.text_secondary')])
-          Text(this.replyEnabled ? '写回复' : this.replyLabel).fontSize(14).maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.text_primary'))
-        }.width('100%').justifyContent(FlexAlign.Start).padding({ left: 14, right: 10 })
-      }.height(52).width(this.readerReplyWidth).clip(true).id('topic_reply_entry')
-        .backgroundColor($r('app.color.surface')).systemMaterial(materialFor(this.appearance))
-        .enabled(this.replyEnabled && this.readerToolsVisible).accessibilityText(this.replyLabel)
+      Stack() {
+        ReaderGlassSurface({ appearance: this.appearance }).width('100%').height(52).id('topic_reply_glass')
+        Button({ type: ButtonType.Capsule, buttonStyle: ButtonStyleMode.NORMAL }) {
+          Row({ space: 8 }) {
+            SymbolGlyph($r('sys.symbol.message')).fontSize(18).fontColor([$r('app.color.text_secondary')])
+            Text(this.replyEnabled ? '写回复' : this.replyLabel).fontSize(14).maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis }).fontColor($r('app.color.text_primary'))
+          }.width('100%').justifyContent(FlexAlign.Start).padding({ left: 14, right: 10 })
+        }.height(52).width('100%').clip(true).id('topic_reply_entry')
+          .backgroundColor(Color.Transparent).systemMaterial(materialFor(this.appearance))
+          .enabled(this.replyEnabled && this.readerToolsVisible).accessibilityText(this.replyLabel)
+          .hitTestBehavior(this.readerToolsVisible ? HitTestMode.Default : HitTestMode.None)
+          .accessibilityLevel(this.readerToolsVisible ? 'yes' : 'no-hide-descendants')
+          .onClick((): void => { if (this.signedIn()) { this.onCompose(this.topicId, 0, 0); } })
+      }.height(52).width(this.readerReplyWidth)
         .opacity(this.readerToolsVisible ? 1 : 0)
+        .animation({ duration: this.appearance.reduceMotion ? 0 : 220, curve: Curve.EaseInOut })
         .hitTestBehavior(this.readerToolsVisible ? HitTestMode.Default : HitTestMode.None)
         .accessibilityLevel(this.readerToolsVisible ? 'yes' : 'no-hide-descendants')
-        .animation({ duration: this.appearance.reduceMotion ? 0 : 220, curve: Curve.EaseInOut })
-        .onClick((): void => { if (this.signedIn()) { this.onCompose(this.topicId, 0, 0); } })
-      HdsActionBar({
-        primaryButton: this.appearance.reduceMotion ? undefined : new ActionBarButton({
-          baseIcon: $r('sys.symbol.ellipsis_message'), altIcon: $r('sys.symbol.xmark'),
-          width: LengthMetrics.vp(52), iconSize: LengthMetrics.vp(23), id: 'topic_toolbar_toggle',
-          iconFillColor: ColorMetrics.resourceColor($r('app.color.accent')),
-          buttonModifier: this.controlModifier(),
-          accessibilityText: this.toolbarExpanded ? '收起阅读工具栏' : '展开阅读工具栏',
-          hoverTips: this.toolbarExpanded ? '收起工具栏' : '展开工具栏',
-          onClick: (): void => { this.toolbarExpanded = !this.toolbarExpanded; this.scrollPolicy.reset(); }
-        }),
-        startButtons: [new ActionBarButton({
-          baseIcon: $r('sys.symbol.list_bullet'), id: 'topic_jump',
-          width: LengthMetrics.vp(44), iconFillColor: ColorMetrics.resourceColor($r('app.color.text_primary')),
-          buttonModifier: this.controlModifier(), hoverTips: `楼层导航 · #${this.currentNumber}`,
-          accessibilityLevel: this.readerToolsVisible ? 'yes' : 'no-hide-descendants',
-          accessibilityText: `楼层导航，当前第${this.currentNumber}楼，共${this.stream.length}条内容`,
-          onClick: (): void => { this.openFloorNavigation(); }
-        })],
-        endButtons: this.backTopButton === undefined ? [] : [this.backTopButton],
-        isExpand: this.readerToolsVisible,
-        $isExpand: (expanded: boolean): void => { this.toolbarExpanded = expanded; },
-        blurStrategy: BlurStrategy.DISABLE,
-        actionBarStyle: new ActionBarStyle({ height: LengthMetrics.vp(60), margin: LengthMetrics.vp(8),
-          innerSpace: LengthMetrics.vp(6), startSpace: LengthMetrics.vp(8), endSpace: LengthMetrics.vp(8),
-          isPrimaryIconChanged: this.toolbarExpanded, backgroundBlurStyle: BlurStyle.NONE,
-          backgroundColor: ColorMetrics.rgba(0, 0, 0, 0) })
-      }).width(this.readerActionsWidth).id('topic_reader_toolbar')
-        .bindSheet(this.showJump, this.jumpSheet, { height: SheetSize.MEDIUM, dragBar: true,
-          backgroundColor: $r('app.color.surface'), onDisappear: (): void => { this.showJump = false; } })
+      Stack() {
+        ReaderGlassSurface({ appearance: this.appearance,
+          radiusVp: this.readerToolsVisible ? 30 : 26 })
+          .width(this.readerToolsVisible ? this.readerActionsWidth : 52)
+          .height(this.readerToolsVisible ? 60 : 52).id('topic_actions_glass')
+          .animation({ duration: this.appearance.reduceMotion ? 0 : 240, curve: Curve.EaseInOut })
+        HdsActionBar({
+          primaryButton: this.appearance.reduceMotion ? undefined : new ActionBarButton({
+            baseIcon: $r('sys.symbol.ellipsis_message'), altIcon: $r('sys.symbol.xmark'),
+            width: LengthMetrics.vp(52), iconSize: LengthMetrics.vp(23), id: 'topic_toolbar_toggle',
+            shadowStyle: { radius: 0, color: Color.Transparent },
+            iconFillColor: ColorMetrics.resourceColor($r('app.color.accent')),
+            buttonModifier: this.controlModifier(),
+            accessibilityText: this.toolbarExpanded ? '收起阅读工具栏' : '展开阅读工具栏',
+            hoverTips: this.toolbarExpanded ? '收起工具栏' : '展开工具栏',
+            onClick: (): void => { this.toolbarExpanded = !this.toolbarExpanded; this.scrollPolicy.reset(); }
+          }),
+          startButtons: [new ActionBarButton({
+            baseIcon: $r('sys.symbol.list_bullet'), id: 'topic_jump',
+            shadowStyle: { radius: 0, color: Color.Transparent },
+            width: LengthMetrics.vp(44), iconFillColor: ColorMetrics.resourceColor($r('app.color.text_primary')),
+            buttonModifier: this.controlModifier(), hoverTips: `楼层导航 · #${this.currentNumber}`,
+            accessibilityLevel: this.readerToolsVisible ? 'yes' : 'no-hide-descendants',
+            accessibilityText: `楼层导航，当前第${this.currentNumber}楼，共${this.stream.length}条内容`,
+            onClick: (): void => { this.openFloorNavigation(); }
+          })],
+          endButtons: this.backTopButton === undefined ? [] : [this.backTopButton],
+          isExpand: this.readerToolsVisible,
+          $isExpand: (expanded: boolean): void => { this.toolbarExpanded = expanded; },
+          blurStrategy: BlurStrategy.DISABLE,
+          actionBarStyle: new ActionBarStyle({ height: LengthMetrics.vp(60), margin: LengthMetrics.vp(8),
+            innerSpace: LengthMetrics.vp(6), startSpace: LengthMetrics.vp(8), endSpace: LengthMetrics.vp(8),
+            isPrimaryIconChanged: this.toolbarExpanded, backgroundBlurStyle: BlurStyle.NONE,
+            backgroundColor: ColorMetrics.rgba(0, 0, 0, 0) })
+        }).width(this.readerActionsWidth)
+          .bindSheet(this.showJump, this.jumpSheet, { height: SheetSize.MEDIUM, dragBar: true,
+            backgroundColor: $r('app.color.surface'), onDisappear: (): void => { this.showJump = false; } })
+      }.width(this.readerActionsWidth).height(76).id('topic_reader_toolbar')
+        .hitTestBehavior(HitTestMode.Transparent)
     }.width('100%').height(76).padding({ left: 16, right: 16 }).justifyContent(FlexAlign.End)
       .hitTestBehavior(HitTestMode.Transparent)
       .onAreaChange((_old: Area, next: Area): void => {
