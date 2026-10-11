@@ -9,9 +9,9 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 基于 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的真实功能与 Discourse 接口，以 ArkTS / ArkUI V2 重构的鸿蒙原生客户端。固定参考提交 `e31fe8e3a06a5de2e9c013925dd1c40a7743d30e`，源代码版本 1.1.1。
 
-本地应用版本 `0.2.6`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
+本地应用版本 `0.2.7`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
 
-调试包：[0.2.6 GitHub Release](https://github.com/xyuuii/linuxdo-harmony/releases/tag/v0.2.6) · [下载 HAP](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.6/LinuxDo-HarmonyOS7-0.2.6-debug.hap) · [SHA256 校验文件](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.6/SHA256SUMS)。这是开发调试签名包，安装受签名设备授权限制；其他设备请按下方构建说明使用自己的开发者签名。二进制保存在 Release 附件中。
+调试包：[0.2.7 GitHub Release](https://github.com/xyuuii/linuxdo-harmony/releases/tag/v0.2.7) · [下载 HAP](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.7/LinuxDo-HarmonyOS7-0.2.7-debug.hap) · [SHA256 校验文件](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.7/SHA256SUMS)。这是开发调试签名包，安装受签名设备授权限制；其他设备请按下方构建说明使用自己的开发者签名。二进制保存在 Release 附件中。
 
 0.1.1 收紧首页、分类和搜索的信息密度：话题标题最多两行，缩小卡片留白；分类等级与名称同排。分类详情移除了重复标题和不适用的底部页签预留，列表用满可用高度。首页和搜索仅在滚动末端为浮动页签留空间。
 
@@ -28,6 +28,8 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 0.2.5 按官方沉浸光感指南将阅读控件合并到单一材质容器，移除手绘渐变高光与子按钮的重复材质、阴影。真机沿用系统材质自带的模糊、边缘和阴影；当前API26模拟器报告支持但不绘制光学材质，使用均匀背景模糊与轻外阴影后备，避免出现内部灰带或完全透明。展开、收起、楼层、回顶及半屏回复已在模拟器验证。
 
 0.2.6 将底栏触点流光与普通阴影分开。主导航与阅读工具共用一层材质容器，支持设备启用官方lightEffect，原生路径移除遮挡材质的后备模糊层；模拟器和不支持设备以真实触摸坐标驱动后备高光。光效跟随同一次按压跨按钮移动，松手或取消时消失；减少动态关闭弹性与转场，保留直接跟手高光，轻柔/关闭/高对比不启用光效。
+
+0.2.7 修复真机底栏全透明：主导航和阅读操作统一使用可见的兼容玻璃层，将基础染色与背景模糊分开，触点流光独立跟随。Pura X View实测原生材质查询与构造成功仍无滤镜输出，因此浮动底栏不再依赖这一能力标志。系统设置未被修改，效果关闭及高对比仍使用实色。
 
 首页、分类、搜索和我的使用 AdaptiveNavigationBar 主导航：向下浏览时，同一个材质胶囊连续收拢为右下当前页图标按钮；反向滚动或点击按钮连续展开为四个页签。表面与图标节点保持，文字随收拢渐隐，列表阅读位置保持。开启减少动态效果或高对比时，主导航保持展开。
 
@@ -65,18 +67,18 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 ## 鸿蒙 7 原生设计
 
-使用 `HdsNavigation` 组织页面、`HdsTabs` 切换主页面内容。帖子在 `NavDestination` 内绘制固定的作者/话题双行标题：高度为动态顶部避让加56vp，启用单层系统背景模糊，关闭效果或高对比时使用实色。底部主导航由 AdaptiveNavigationBar 呈现。内容面板保持清晰，系统沉浸材质用于主导航、阅读工具栏、设置控件和确认弹窗。预览中的背景是独立静态 SVG，控件光感来自 API 26 的 `uiMaterial.ImmersiveMaterial`。
+使用 `HdsNavigation` 组织页面、`HdsTabs` 切换主页面内容。帖子在 `NavDestination` 内绘制固定的作者/话题双行标题：高度为动态顶部避让加56vp，启用单层系统背景模糊，关闭效果或高对比时使用实色。底部主导航由 AdaptiveNavigationBar 呈现。内容面板保持清晰，浮动主导航与阅读工具采用兼容背景模糊、主题染色与触点流光；设置控件和确认弹窗仍使用系统沉浸材质。预览中的背景是独立静态 SVG，通用控件原生材质使用 API 26 的 `uiMaterial.ImmersiveMaterial`，不将底栏兼容绘制称为原生光学渲染。
 
 主导航常驻同一个材质 Stack 和四个稳定 key 的图标节点，由一个弹簧 progress 连续驱动表面宽高、位置、图标位移与文字透明度。HdsTabs 的 barHeight 为0，仅保留内容切换；收放由同一表面完成。交互取自实际手机上的酷安鸿蒙版观察，参考截图只保留在本机，未复制其源码、图标或媒体资源。
 
-| 等级 | 控件与主导航的系统材质 |
-| --- | --- |
-| 关闭 | 实色、`Material.empty` |
-| 轻柔 | `REGULAR`，无阴影/交互形变/触摸光感 |
-| 标准 | `REGULAR`、系统阴影、触摸光感 |
-| 丰富 | `THIN`、系统阴影、形变及触摸光感 |
+| 等级 | 通用控件系统材质 | 底栏兼容表面 |
+| --- | --- | --- |
+| 关闭 | 实色、`Material.empty` | 实色 |
+| 轻柔 | `REGULAR`，无阴影/交互形变/触摸光感 | 模糊16，无触点流光 |
+| 标准 | `REGULAR`、系统阴影、触摸光感 | 模糊24、触点流光 |
+| 丰富 | `THIN`、系统阴影、形变及触摸光感 | 模糊32、触点流光 |
 
-高对比覆盖材质选择。减少动态关闭控件形变及页签切换动画，并让主导航静态展开；标准/丰富等级保留直接随触点移动的高光，不加入自主循环动画，不宣称停止帖子 GIF。底栏在模拟器及不支持材质的设备上采用模糊与跟手高光后备，其他控件仍按原有能力回退。设备本身的 `getGlobalMaterialLevel()` 不可修改，本应用不会改变它。
+高对比覆盖材质选择。减少动态关闭控件形变及页签切换动画，并让主导航静态展开；标准/丰富等级保留直接随触点移动的高光，不加入自主循环动画，不宣称停止帖子 GIF。底栏在真机与模拟器上均保留可见染色、背景模糊与跟手高光，其他控件仍按原有能力回退。设备本身的 `getGlobalMaterialLevel()` 不可修改，本应用不会改变它。
 
 启动时先获取主窗口并等待 `setWindowLayoutFullScreen(true)` 完成，再加载页面；任一步失败仍按默认布局继续加载，窗口布局失败只记录安全错误码。Index 通过 `@Env(SystemProperties.WINDOW_AVOID_AREA)` 获取以 vp 表示的动态避让信息：顶部取状态栏与挖孔高度的最大值，底部取手势指示条、系统栏与挖孔高度的最大值，不相加，也不把键盘高度计入系统栏避让。
 
@@ -117,7 +119,7 @@ npm install --prefix .local-test-runtime --no-save --package-lock=false --ignore
 DEVECO_TYPESCRIPT_PATH="$PWD/.local-test-runtime/node_modules/typescript/lib/typescript.js" node --test tests/*.test.mjs
 ```
 
-当前102项本地离线回归已通过。GitHub Actions 使用相同的 TypeScript 4.9.5 和 Node 22 执行同一测试集；测试只读取源码和编译运行时，不访问真实论坛或设备存储。它不编译 ArkUI、不登录论坛，不替代 SDK 编译及设备验收。
+当前115项本地离线回归已通过。GitHub Actions 使用相同的 TypeScript 4.9.5 和 Node 22 执行同一测试集；测试只读取源码和编译运行时，不访问真实论坛或设备存储。它不编译 ArkUI、不登录论坛，不替代 SDK 编译及设备验收。
 
 本机 `app/build-profile.json5` 不进入 Git；仓库提供无凭据的 `build-profile.example.json5`，首次执行 build.sh 会复制模板。需要安装到自己的设备时，以自己的开发者账号生成包含目标设备的调试签名：
 
@@ -142,7 +144,7 @@ macOS 上如遇 CLI 把已有镜像误判未下载，可用 `./scripts/start-emu
 - `devecocli check lint` 当前返回 Files checked:0，不能作为 lint 有效通过；静态依据是 SDK 编译。
 - SaveButton 调用 createAsset 的静态权限提示与官方临时授权场景对应，不为消除提示增加广域图库权限；相关文件/网络异常有释放和失败处理。
 
-验证记录见 [docs/acceptance.md](docs/acceptance.md)。本机日志、账号界面、签名私钥和配置不随公开源码分发；0.2.6 调试签名安装包单独提供在 GitHub Release，其他开发者需使用自己的 SDK 和设备签名构建。
+验证记录见 [docs/acceptance.md](docs/acceptance.md)。本机日志、账号界面、签名私钥和配置不随公开源码分发；调试签名安装包单独提供在 GitHub Release，其他开发者需使用自己的 SDK 和设备签名构建。
 
 ## 与 Android 版本的区别
 
