@@ -1,0 +1,18 @@
+LINUX DO Harmony
+Copyright 2026 xyuuii and contributors
+
+This HarmonyOS NEXT application is independently implemented in ArkTS / ArkUI.
+Its functionality and Discourse API behavior are inspired by
+xuemk/linuxdo-android: https://github.com/xuemk/linuxdo-android
+No Android source files or assets from that repository are redistributed.
+
+The generated Ability scaffolding retains:
+Copyright (c) 2026 Huawei Device Co., Ltd.
+Licensed under the Apache License, Version 2.0.
+Affected files:
+  app/entry/src/main/ets/entryability/EntryAbility.ets
+  app/entry/src/main/ets/entrybackupability/EntryBackupAbility.ets
+EntryAbility has been adapted for the native application startup flow.
+
+LINUX DO, HarmonyOS and Huawei names, and forum user content belong to their
+respective owners. The software license does not grant trademark rights.

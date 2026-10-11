@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "LINUX DO 鸿蒙原生客户端"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "浏览与交流"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "LINUX DO"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+name: Logic tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: Install the pinned fixture compiler
+        run: npm install --prefix "$RUNNER_TEMP/linuxdo-fixture" --no-save --package-lock=false --ignore-scripts typescript@4.9.5
+      - name: Run offline logic fixtures
+        env:
+          DEVECO_TYPESCRIPT_PATH: ${{ runner.temp }}/linuxdo-fixture/node_modules/typescript/lib/typescript.js
+        run: node --test tests/*.test.mjs

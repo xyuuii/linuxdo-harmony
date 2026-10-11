@@ -1,0 +1,134 @@
+# LINUX DO Harmony · HarmonyOS NEXT 7
+
+[![Logic tests](https://github.com/xyuuii/linuxdo-harmony/actions/workflows/logic-tests.yml/badge.svg)](https://github.com/xyuuii/linuxdo-harmony/actions/workflows/logic-tests.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+
+社区开发的第三方 LINUX DO 客户端，也是 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的鸿蒙功能衍生项目。感谢原作者 [xuemk](https://github.com/xuemk)；原介绍帖：[LINUX DO](https://linux.do/t/topic/2998703)。本仓库独立实现 ArkTS / ArkUI 原生页面与系统能力，公开源码采用 Apache-2.0。
+
+A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. Built with ArkTS / ArkUI V2 and HarmonyOS 7 system materials.
+
+基于 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的真实功能与 Discourse 接口，以 ArkTS / ArkUI V2 重构的鸿蒙原生客户端。固定参考提交 `e31fe8e3a06a5de2e9c013925dd1c40a7743d30e`，源代码版本 1.1.1。
+
+本地应用版本 `0.1.1`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
+
+0.1.1 收紧首页、分类和搜索的信息密度：话题标题最多两行，缩小卡片留白；分类等级与名称同排。分类详情移除了重复标题和不适用的底部页签预留，列表用满可用高度。首页和搜索仅在滚动末端为浮动页签留空间。
+
+## 界面预览
+
+| 四档沉浸光感 | 深色与高对比 |
+| --- | --- |
+| <img src="docs/screenshots/effect-levels.png" width="260" alt="四档光感设置" /> | <img src="docs/screenshots/dark-appearance.png" width="260" alt="深色外观设置" /> |
+
+截图仅展示外观设置。信息密度更新后，分类目录同屏约6组，话题同屏约6～7条，实际数量随标题长度和字体设置变化。
+
+## 功能
+
+| 页面 / 流程 | 实现 |
+| --- | --- |
+| 最新 | 真实话题、作者、分类、回复数及浏览量；分页、下拉刷新、前台可选自动刷新 |
+| 分类 | 真实分类树、同名 Lv 子分类分组、按分类分页浏览 |
+| 搜索 | 关键词、六种排序、结果摘要与分页 |
+| 我的 | 总结、活动、通知、现有私信、账号与邮箱资料、退出 |
+| 话题 | 原生安全富文本、前后 20 楼切片、首楼/尾部/指定楼定位、楼中楼三条预览及展开收起 |
+| 互动 | 按服务器权限回复、编辑、删除、表情回应、简评、解决方案标记 |
+| 编辑器 | 账号隔离的本机草稿、图库/文档选择器、4 MiB 附件校验、用户发表时才上传 |
+| 图片 / 附件 | 同 UA / 会话的沙箱图片加载、原图查看、SaveButton 临时授权保存、系统文档保存 |
+| 通知 | 全部 / 回复 / 点赞 / 私信；真实服务端 offset，点击已读，定位具体楼层；前台轮询与错误退避 |
+| 登录 | 账号密码、邮件登录链接 token、TOTP / 恢复码、可见网页验证与第三方认证 |
+| 外观 | 跟随系统 / 浅色 / 深色，四档沉浸光感，减少动态、高对比、树形阅读与设置持久化 |
+
+启动时允许浏览服务器公开内容；私有内容与操作仍由服务器鉴权。没有额外添加原项目未提供的新建话题或新私信收件人功能。
+
+## 鸿蒙 7 原生设计
+
+使用 `HdsNavigation` / `HdsTabs` 的悬浮胶囊页签和系统符号；内容面板保持清晰，沉浸式材质用于导航、阅读工具栏、设置控件和确认弹窗。预览中的背景是独立静态 SVG，真实光感来自 API 26 的 `uiMaterial.ImmersiveMaterial`。
+
+| 等级 | 控件系统材质 | HDS 导航 |
+| --- | --- | --- |
+| 关闭 | 实色、`Material.empty` | `NONE`，同时关闭旧背景模糊 |
+| 轻柔 | `REGULAR`，无阴影/交互形变/触摸光感 | `SMOOTH` |
+| 标准 | `REGULAR`、系统阴影、触摸光感 | `GENTLE` |
+| 丰富 | `THIN`、系统阴影、形变及触摸光感 | `EXQUISITE` |
+
+高对比覆盖材质选择。减少动态关闭控件形变/触摸光效、导航材质及页签切换动画，不宣称停止帖子 GIF。设备不支持时使用实色界面；HDS 热调控保持开启。设备本身的 `getGlobalMaterialLevel()` 不可修改，本应用不会改变它。
+
+[华为设计规范](https://developer.huawei.com/consumer/cn/design/) · [HarmonyOS 7 / API 26 升级指导](https://developer.huawei.com/consumer/en/doc/harmonyos-releases/upgrade-adaptation) · [官方沉浸光感方案](https://developer.huawei.com/consumer/cn/doc/guidebook/solution-0000002784570841)
+
+## 登录与数据边界
+
+- API / 原生桥只面向 `https://linux.do`，Cookie 从本应用 ArkWeb 读取，HttpOnly 可同步，密码和两步码不持久化。
+- 原生请求禁止自动重定向。公共外域图片不带论坛 Cookie / CSRF。
+- 网页认证精确允许当前站点展示的身份提供方，显示真实 origin。GitHub 跳转已在模拟器确认到 `github.com` 的真实登录页。
+- 认证弹窗使用独立 controller / 原生面板，保留 POST、window.name 与 opener，子窗口不注册原生桥。
+- 用户完成验证后才启用同源浏览器传输；不自动解验证码，也不自动重放写请求。
+- 换账号立即取消旧请求、清显示数据和缓存；图片按账号、会话代数及进程隔离。
+- 缺失编辑/删除/回复权限按不允许处理，提交前再次向服务器核实。写请求超时提示结果未确认，避免自动重复提交。
+- 只有 `INTERNET` 静态系统权限，选文件走系统选择器，图片保存通过安全控件临时授权。
+
+## 工程与构建
+
+本机验证环境：DevEco Studio 26.0.0.821、HarmonyOS SDK 26.0.0.105 Release、DevEco CLI 1.3.0-stable、CodexPhone API 26 模拟器。
+
+安装 DevEco Studio、HarmonyOS 7 / API 26 SDK 和 devecocli；完整 ArkTS / ArkUI 编译需要官方工具。随后：
+
+```sh
+git clone https://github.com/xyuuii/linuxdo-harmony.git
+cd linuxdo-harmony
+./scripts/build.sh
+node --test tests/*.test.mjs
+```
+
+macOS 默认从 DevEco 的内置 TypeScript 路径执行测试；其他安装位置可设置 `DEVECO_TYPESCRIPT_PATH=/path/to/typescript/lib/typescript.js`。
+
+在没有 HarmonyOS SDK 的机器上，仅执行离线逻辑测试：
+
+```sh
+npm install --prefix .local-test-runtime --no-save --package-lock=false --ignore-scripts typescript@4.9.5
+DEVECO_TYPESCRIPT_PATH="$PWD/.local-test-runtime/node_modules/typescript/lib/typescript.js" node --test tests/*.test.mjs
+```
+
+GitHub Actions 使用相同的 TypeScript 4.9.5 和 Node 22 运行45项 fixture；测试只读取源码和编译运行时，不访问真实论坛或设备存储。它不编译 ArkUI、不登录论坛，不替代 SDK 编译及设备验收。
+
+本机 `app/build-profile.json5` 不进入 Git；仓库提供无凭据的 `build-profile.example.json5`，首次执行 build.sh 会复制模板。需要安装到自己的设备时，以自己的开发者账号生成包含目标设备的调试签名：
+
+```sh
+cd app
+devecocli auth login
+devecocli signature generate --product default
+devecocli run --module entry --device CodexPhone
+```
+
+macOS 上如遇 CLI 把已有镜像误判未下载，可用 `./scripts/start-emulator.sh <已有实例名>` 调用官方底层 Emulator。脚本默认使用当前用户的镜像和实例目录，可通过 `DEVECO_STUDIO_CONTENTS`、`HARMONY_SYSTEM_IMAGE_ROOT`、`HARMONY_EMULATOR_INSTANCE_ROOT` 覆盖；只启动既有实例，不修改镜像 metadata 或清除 userdata。
+
+## 验证
+
+- 完整 SDK 编译、调试签名、安装、启动通过；模拟器 HDC 地址 `127.0.0.1:5555`，API 26 Release。
+- 本地测试读取实际 .ets：响应映射、权限缺省、分页、通知口径、Unicode 简评、写 payload、401/403/429、取消、账号切换、图片隔离和认证域名。
+- 已看到真实服务器最新话题，未使用模拟帖子填充应用。
+- GitHub 认证入口已实测跳转成功；用户完成授权后，原生个人页确认会话有效，重启后仍可读取真实帖子。搜索“鸿蒙”已返回真实结果。
+- 本次没有代用户发帖、上传、删除或改变通知已读状态。服务器写操作、第二账号切换及物理设备光感表现尚未端到端验证，详见验收记录。
+- `devecocli check lint` 当前返回 Files checked:0，不能作为 lint 有效通过；静态依据是 SDK 编译。
+- SaveButton 调用 createAsset 的静态权限提示与官方临时授权场景对应，不为消除提示增加广域图库权限；相关文件/网络异常有释放和失败处理。
+
+验证记录见 [docs/acceptance.md](docs/acceptance.md)。本机日志、账号界面和签名安装包位于被忽略的 `artifacts/`，不随公开仓库分发；其他开发者需使用自己的 SDK 和签名构建。
+
+## 与 Android 版本的区别
+
+- 页面和系统能力全部为鸿蒙原生；网页登录只用于身份认证/站点验证。
+- 原 Android APK 版本源不用于鸿蒙更新，当前未配置应用商店/HAP 更新分发渠道。
+- 原外部浏览器 RSA user-api-key 授权由本应用 ArkWeb 身份提供方登录和同源传输替代；没有注册 Android 的 discourse:// 授权回调。
+- 保留源项目 track_visit=false，没有添加阅读计时上报，不承诺增加网站阅读活跃统计。
+- Android 参考克隆只保留在本地 .reference，排除 Git 和交付包。公开仓库为独立鸿蒙实现，归属及许可范围见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+
+## 工程结构
+
+- `app/entry/src/main/ets/pages/`：原生页面与导航。
+- `components/`：话题列表、富文本、原生图片和材质预览。
+- `models/`：论坛数据、会话及持久化外观设置。
+- `services/`：论坛协议、网络/浏览器传输、媒体缓存与材质策略。
+- `tests/`：读取实际 .ets 的离线 fixture。
+- `scripts/`：构建入口和既有模拟器启动。
+
+## 贡献与许可
+
+贡献流程见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全报告见 [SECURITY.md](SECURITY.md)。本仓库采用 [Apache License 2.0](LICENSE)，保留 [NOTICE](NOTICE) 中的第三方声明；原 Android 仓库在本次检查时没有声明许可证，本许可不覆盖其代码或资源。品牌、论坛内容与 SDK 的权利归各自所有者。

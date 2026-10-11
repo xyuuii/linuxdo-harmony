@@ -1,0 +1,10 @@
+{
+  "app": {
+    "bundleName": "com.xyuuii.linuxdo.harmony",
+    "vendor": "xyuuii",
+    "versionCode": 101,
+    "versionName": "0.1.1",
+    "icon": "$media:layered_image",
+    "label": "$string:app_name"
+  }
+}
