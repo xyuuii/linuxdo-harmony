@@ -28,14 +28,16 @@ function load(value, bindings) {
 const HoldingHandStatus = { NOT_HELD: 0, LEFT_HAND_HELD: 1, RIGHT_HAND_HELD: 2, BOTH_HANDS_HELD: 3, UNKNOWN_STATUS: 16 };
 function runtime(options = {}) {
   const subscriptions = []; const unsubscriptions = [];
+  const logs = [];
   const motion = { HoldingHandStatus,
     on(type, callback) { if (options.onError) { throw { code: options.onError }; } subscriptions.push({ type, callback }); },
     off(type, callback) { unsubscriptions.push({ type, callback }); if (options.offError) { throw { code: options.offError }; } }
   };
   const exports = load(source('services/HandednessState'), {
-    motion, canIUse: capability => { assert.equal(capability, 'SystemCapability.MultimodalAwareness.Motion'); return options.supported !== false; }
+    motion, hilog: { info: (...values) => logs.push(values) },
+    canIUse: capability => { assert.equal(capability, 'SystemCapability.MultimodalAwareness.Motion'); return options.supported !== false; }
   });
-  return { ...exports, state: exports.handednessState, subscriptions, unsubscriptions, options };
+  return { ...exports, state: exports.handednessState, subscriptions, unsubscriptions, options, logs };
 }
 
 test('only actual left/right holding states move the collapsed side; uncertain states preserve the previous side', () => {
@@ -105,4 +107,52 @@ test('EntryAbility starts in foreground and stops on background, stage destructi
   const ability = new exports.default();
   ability.onForeground(); ability.onBackground(); ability.onWindowStageDestroy(); ability.onDestroy();
   assert.deepEqual(events, ['start', 'stop', 'stop', 'stop']);
+});
+
+test('diagnostic status reports current real callback separately from a retained button side', () => {
+  const { state, subscriptions } = runtime();
+  assert.equal(state.diagnosticText(), '等待应用前台连接');
+  state.start();
+  assert.equal(state.diagnosticText(), '已连接系统，等待握持');
+  const callback = subscriptions[0].callback;
+  callback(HoldingHandStatus.LEFT_HAND_HELD);
+  assert.equal(state.diagnosticText(), '当前左手握持');
+  callback(HoldingHandStatus.BOTH_HANDS_HELD);
+  assert.equal(state.diagnosticText(), '双手握持，保持按钮位置');
+  assert.equal(state.sideLeft, true);
+  callback(HoldingHandStatus.UNKNOWN_STATUS);
+  assert.equal(state.diagnosticText(), '未识别握持，保持按钮位置');
+  callback(HoldingHandStatus.NOT_HELD);
+  assert.equal(state.diagnosticText(), '未握持，保持按钮位置');
+  callback(HoldingHandStatus.RIGHT_HAND_HELD);
+  assert.equal(state.diagnosticText(), '当前右手握持');
+  callback(HoldingHandStatus.LEFT_HAND_HELD);
+  state.stop(); state.start();
+  assert.equal(state.sideLeft, true, 'Keep the safe layout choice while awaiting the new foreground result.');
+  assert.equal(state.holdingStatus, HoldingHandStatus.UNKNOWN_STATUS);
+  assert.equal(state.diagnosticText(), '已连接系统，等待握持');
+});
+
+test('diagnostic errors and logs expose status codes without messages or account data', () => {
+  const unsupported = runtime({ onError: 801 });
+  unsupported.state.start();
+  assert.equal(unsupported.state.diagnosticText(), '当前设备暂不支持（801）');
+  const denied = runtime({ onError: 201 });
+  denied.state.start();
+  assert.equal(denied.state.diagnosticText(), '暂不可用（201）');
+  const { state, subscriptions, logs } = runtime();
+  state.start();
+  subscriptions[0].callback(HoldingHandStatus.LEFT_HAND_HELD);
+  state.stop();
+  const count = logs.length;
+  subscriptions[0].callback(HoldingHandStatus.RIGHT_HAND_HELD);
+  assert.equal(logs.length, count, 'Ignore stale callbacks in observation as well as layout.');
+  assert.deepEqual(logs.map(values => values[3]), ['subscribe', 'event', 'unsubscribe', 'stop']);
+  for (const values of [...logs, ...unsupported.logs, ...denied.logs]) {
+    assert.equal(values[1], 'LinuxDoGrip');
+    assert.equal(values.length, 8);
+    assert.equal(typeof values[5], 'number');
+    assert.equal(typeof values[6], 'number');
+    assert.ok(['left', 'right'].includes(values[7]));
+  }
 });

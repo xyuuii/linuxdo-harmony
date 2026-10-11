@@ -9,9 +9,9 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 基于 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的真实功能与 Discourse 接口，以 ArkTS / ArkUI V2 重构的鸿蒙原生客户端。固定参考提交 `e31fe8e3a06a5de2e9c013925dd1c40a7743d30e`，源代码版本 1.1.1。
 
-本地应用版本 `0.2.8`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
+本地应用版本 `0.2.9`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
 
-调试包：[0.2.8 GitHub Release](https://github.com/xyuuii/linuxdo-harmony/releases/tag/v0.2.8) · [下载 HAP](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.8/LinuxDo-HarmonyOS7-0.2.8-debug.hap) · [SHA256 校验文件](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.8/SHA256SUMS)。这是开发调试签名包，安装受签名设备授权限制；其他设备请按下方构建说明使用自己的开发者签名。二进制保存在 Release 附件中。
+调试包：[0.2.9 GitHub Release](https://github.com/xyuuii/linuxdo-harmony/releases/tag/v0.2.9) · [下载 HAP](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.9/LinuxDo-HarmonyOS7-0.2.9-debug.hap) · [SHA256 校验文件](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.9/SHA256SUMS)。这是开发调试签名包，安装受签名设备授权限制；其他设备请按下方构建说明使用自己的开发者签名。二进制保存在 Release 附件中。
 
 0.1.1 收紧首页、分类和搜索的信息密度：话题标题最多两行，缩小卡片留白；分类等级与名称同排。分类详情移除了重复标题和不适用的底部页签预留，列表用满可用高度。首页和搜索仅在滚动末端为浮动页签留空间。
 
@@ -32,6 +32,8 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 0.2.7 修复真机底栏全透明：主导航和阅读操作统一使用可见的兼容玻璃层，将基础染色与背景模糊分开，触点流光独立跟随。Pura X View实测原生材质查询与构造成功仍无滤镜输出，因此浮动底栏不再依赖这一能力标志。系统设置未被修改，效果关闭及高对比仍使用实色。
 
 0.2.8 新增首页双击已选“最新”回顶并刷新，普通单击切换页签仍立即响应；置顶话题集中为紧凑标题块，默认三条，可展开全部。帖子标题区域支持双击回顶，网站简评改为头像与内容胶囊；修复鸿蒙网络库拒绝空正文请求导致的点赞失败，喜欢操作提供服务器结果反馈，“我的 → 我点赞过”展示送出的喜欢，通知的“收到的赞”单独保留接收口径。底栏继续共用兼容玻璃与触点流光，调整通透层次；收起按钮可根据系统真实握持手状态靠向左侧或右侧，未知、双手或不支持时保留默认/上次明确侧别。
+
+0.2.9 补充真实握姿诊断状态与前后台订阅日志，避免把保留的按钮位置当成当前识别结果。Pura X View已保留数据安装并验证首页回顶刷新、触点流光、简评、喜欢及撤销、半屏回复键盘与深浅色/高对比样式；系统握姿订阅成功并返回未握持，真实左右换手还待触发，不能用自动点击替代。
 
 首页、分类、搜索和我的使用 AdaptiveNavigationBar 主导航：向下浏览时，同一个材质胶囊连续收拢为当前页图标按钮，默认靠右并可随明确握姿侧别调整；反向滚动或点击按钮连续展开为四个页签。表面与图标节点保持，文字随收拢渐隐，列表阅读位置保持。开启减少动态效果或高对比时，主导航保持展开。
 
