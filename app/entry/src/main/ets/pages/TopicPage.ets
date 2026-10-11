@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { window } from '@kit.ArkUI';
 import { http } from '@kit.NetworkKit';
 import { webview } from '@kit.ArkWeb';
 import { fileIo, picker } from '@kit.CoreFileKit';
@@ -8,8 +9,10 @@ import { Boost, Post, Reaction, TopicDetail, measureBoost } from '../models/Foru
 import { ForumSession, forumSession } from '../models/ForumSession';
 import { forumApi, RequestCancellation } from '../services/ForumApi';
 import { materialFor } from '../services/MaterialPolicy';
-import { RichPostContent, postContentUrl } from '../components/RichPostContent';
+import { RichPostContent, postContentUrl, parsePostContent, PostBlock } from '../components/RichPostContent';
 import { NativeForumImage } from '../components/NativeForumImage';
+import { ForumImageViewer } from '../components/ForumImageViewer';
+import { relativeTime } from '../services/ForumPresentation';
 
 export interface TopicTreeRow {
   post: Post;
@@ -76,11 +79,35 @@ export function topicTreeRows(posts: Post[], expanded: number[], collapsed: numb
   return output;
 }
 
+@ObservedV2
+class ObservedTopicTreeRow implements TopicTreeRow {
+  @Trace post: Post = {} as Post;
+  @Trace rootId: number = 0;
+  @Trace depth: number = 0;
+  @Trace lastInGroup: boolean = false;
+  @Trace totalReplies: number = 0;
+  @Trace loadedReplies: number = 0;
+  @Trace shownReplies: number = 0;
+  @Trace unloadedIds: number[] = [];
+  constructor(value: TopicTreeRow) { this.update(value); }
+  update(value: TopicTreeRow): void {
+    this.post = value.post;
+    this.rootId = value.rootId;
+    this.depth = value.depth;
+    this.lastInGroup = value.lastInGroup;
+    this.totalReplies = value.totalReplies;
+    this.loadedReplies = value.loadedReplies;
+    this.shownReplies = value.shownReplies;
+    this.unloadedIds = value.unloadedIds;
+  }
+}
+
+/** Keep observable rows alive while their layout/reactions change under stable keys. */
 class TopicRowsSource implements IDataSource {
-  private items: TopicTreeRow[] = [];
+  private items: ObservedTopicTreeRow[] = [];
   private listeners: DataChangeListener[] = [];
   totalCount(): number { return this.items.length; }
-  getData(index: number): TopicTreeRow { return this.items[index]; }
+  getData(index: number): ObservedTopicTreeRow { return this.items[index]; }
   registerDataChangeListener(listener: DataChangeListener): void {
     if (!this.listeners.includes(listener)) { this.listeners.push(listener); }
   }
@@ -88,14 +115,22 @@ class TopicRowsSource implements IDataSource {
     this.listeners = this.listeners.filter((item: DataChangeListener): boolean => item !== listener);
   }
   update(items: TopicTreeRow[]): void {
-    this.items = items;
+    const existing: Map<string, ObservedTopicTreeRow> = new Map<string, ObservedTopicTreeRow>();
+    this.items.forEach((row: ObservedTopicTreeRow): void => {
+      existing.set(`${row.post.id}-${row.rootId}-${row.depth}`, row);
+    });
+    this.items = items.map((row: TopicTreeRow): ObservedTopicTreeRow => {
+      const old: ObservedTopicTreeRow | undefined = existing.get(`${row.post.id}-${row.rootId}-${row.depth}`);
+      if (old !== undefined) { old.update(row); return old; }
+      return new ObservedTopicTreeRow(row);
+    });
     this.listeners.forEach((listener: DataChangeListener): void => { listener.onDataReloaded(); });
   }
 }
 
 function dateLabel(value: string): string {
   const date: Date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '日期未知' : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? '日期未知' : relativeTime(value);
 }
 
 function failureMessage(error: Object): string {
@@ -145,6 +180,9 @@ export function parseTopicLink(url: string): TopicLink | undefined {
 struct TopicPostCard {
   @Param post: Post = {} as Post;
   @Param compact: boolean = false;
+  @Param topicTitle: string = '';
+  @Param authorUsername: string = '';
+  @Param topicState: string = '';
   @Param canReply: boolean = false;
   @Param busy: boolean = false;
   @Param highlighted: boolean = false;
@@ -176,6 +214,19 @@ struct TopicPostCard {
       (this.post.currentUserReaction === undefined || this.post.currentUserReaction.canUndo);
   }
 
+  @Computed
+  get isAuthor(): boolean { return this.post.username.length > 0 && this.post.username === this.authorUsername; }
+
+  @Computed
+  get heartCount(): number {
+    return this.post.reactions.find((reaction: Reaction): boolean => reaction.id === 'heart')?.count || 0;
+  }
+
+  @Computed
+  get hasMoreActions(): boolean {
+    return this.post.canEdit || this.post.canDelete || this.post.canBoost || this.post.canAcceptAnswer || this.post.canUnacceptAnswer;
+  }
+
   @Builder
   reactionMenu() {
     Menu() {
@@ -195,29 +246,42 @@ struct TopicPostCard {
       if (this.post.canDelete) {
         MenuItem({ content: '删除' }).enabled(!this.busy).onClick(() => { this.onDelete(this.post); })
       }
+      if (this.post.canBoost) {
+        MenuItem({ content: '写简评' }).enabled(!this.busy).onClick(() => { this.boosting = !this.boosting; })
+      }
+      if (this.post.canAcceptAnswer || this.post.canUnacceptAnswer) {
+        MenuItem({ content: this.post.acceptedAnswer ? '取消解决方案' : '标为解决方案' }).enabled(!this.busy)
+          .onClick(() => { this.onSolution(this.post); })
+      }
     }
   }
 
   build() {
-    Column({ space: 12 }) {
-      Row({ space: 10 }) {
+    Column({ space: this.compact ? 6 : 10 }) {
+      Row({ space: 8 }) {
         if (this.post.avatarUrl) {
           NativeForumImage({ url: this.post.avatarUrl, fit: ImageFit.Cover,
             ownerId: forumSession.user?.id || 0, accessibleLabel: `${this.post.username} 的头像` })
-            .width(this.compact ? 28 : 38).height(this.compact ? 28 : 38)
+            .width(this.compact ? 22 : 32).height(this.compact ? 22 : 32)
             .borderRadius(19)
         } else {
           Text(this.post.username.slice(0, 1).toUpperCase()).fontSize(17).fontWeight(FontWeight.Medium)
-            .width(this.compact ? 28 : 38).height(this.compact ? 28 : 38).textAlign(TextAlign.Center)
+            .width(this.compact ? 22 : 32).height(this.compact ? 22 : 32).textAlign(TextAlign.Center)
             .backgroundColor($r('app.color.selected_background')).borderRadius(19)
         }
         Column({ space: 3 }) {
-          Text(this.post.username).fontSize(this.compact ? 14 : 16).fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-          Text(dateLabel(this.post.createdAt)).fontSize(11).fontColor($r('app.color.text_secondary'))
+          Row({ space: 5 }) {
+            Text(this.post.username).fontSize(this.compact ? 13 : 14).fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.text_primary')).maxLines(1)
+            if (this.isAuthor) {
+              Text('楼主').fontSize(10).fontColor($r('app.color.accent')).padding({ left: 4, right: 4, top: 2, bottom: 2 })
+                .backgroundColor($r('app.color.selected_background')).borderRadius(4)
+            }
+          }
+
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
         Text(`#${this.post.postNumber}`).fontSize(12).fontColor($r('app.color.text_secondary'))
-        if (this.post.canEdit || this.post.canDelete) {
+        if (this.hasMoreActions) {
           Button('···', { type: ButtonType.Circle, buttonStyle: ButtonStyleMode.TEXTUAL }).width(40).height(40)
             .fontSize(20).fontColor($r('app.color.text_secondary')).accessibilityText(`管理第 ${this.post.postNumber} 楼`)
             .bindMenu(this.manageMenu)
@@ -227,38 +291,39 @@ struct TopicPostCard {
         Text(`回复 #${this.post.replyToPostNumber}`).fontSize(12).fontColor($r('app.color.accent'))
           .onClick(() => { this.onJump(this.post.replyToPostNumber); })
       }
+      if (this.post.postNumber === 1 && this.topicTitle.length > 0) {
+        Text(this.topicTitle).fontSize(24).lineHeight(32).fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.text_primary')).width('100%').id('topic_main_title')
+      }
+      if (this.post.postNumber === 1 && this.topicState.length > 0) {
+        Text(this.topicState).fontSize(12).fontColor($r('app.color.text_secondary'))
+      }
       RichPostContent({ cooked: this.post.cooked, compact: this.compact, reduceMotion: this.reduceMotion,
         onOpenLink: this.onOpenLink, onPicture: this.onPicture })
       if (this.post.reactions.length > 0) {
         Flex({ wrap: FlexWrap.Wrap }) {
-          ForEach(this.post.reactions.filter((reaction: Reaction): boolean => reaction.count > 0), (reaction: Reaction) => {
+          ForEach(this.post.reactions.filter((reaction: Reaction): boolean => reaction.count > 0 && reaction.id !== 'heart'), (reaction: Reaction) => {
             Text(`${reaction.id === 'heart' ? '♥' : reaction.id} ${reaction.count}`).fontSize(12)
               .fontColor($r('app.color.text_secondary')).padding({ left: 8, right: 8, top: 5, bottom: 5 })
               .backgroundColor($r('app.color.selected_background')).borderRadius(14).margin({ right: 6, bottom: 4 })
           }, (reaction: Reaction): string => reaction.id)
         }.width('100%')
       }
-      Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-        Button(this.post.currentUserReaction === undefined ? '♡ 回应' : `♥ ${this.post.currentUserReaction.id}`,
-          { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40).fontSize(13).fontColor($r('app.color.accent'))
-          .enabled(this.canReact)
-          .bindMenu(this.reactionMenu)
-        if (!this.loggedIn) {
-          Button('登录后回应', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(13).height(40).onClick(this.onLogin)
+      Row({ space: 4 }) {
+        Text(dateLabel(this.post.createdAt)).fontSize(11).fontColor($r('app.color.text_secondary'))
+        if (this.post.acceptedAnswer) {
+          Text('✓ 已解决').fontSize(11).fontColor($r('app.color.accent'))
         }
-        if (this.canReply) {
-          Button('回复', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40).fontSize(13)
-            .fontColor($r('app.color.accent')).enabled(!this.busy).onClick(() => { this.onReply(this.post); })
-        }
-        if (this.post.canBoost) {
-          Button('简评', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40).fontSize(13)
-            .fontColor($r('app.color.accent')).enabled(!this.busy).onClick(() => { this.boosting = !this.boosting; })
-        }
-        if (this.post.canAcceptAnswer || this.post.canUnacceptAnswer || this.post.acceptedAnswer) {
-          Button(this.post.acceptedAnswer ? '✓ 已解决' : '标为解决方案', { buttonStyle: ButtonStyleMode.TEXTUAL })
-            .height(40).fontSize(13).fontColor($r('app.color.accent'))
-            .enabled(!this.busy && (this.post.canAcceptAnswer || this.post.canUnacceptAnswer))
-            .onClick(() => { this.onSolution(this.post); })
+        Blank()
+        Button(`${this.post.currentUserReaction?.id === 'heart' ? '♥' : '♡'} ${this.heartCount > 0 ? this.heartCount : '喜欢'}`,
+          { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40).fontSize(12).fontColor($r('app.color.text_secondary'))
+          .enabled(this.canReact).onClick(() => { this.onReact(this.post, 'heart'); })
+          .bindContextMenu(this.reactionMenu, ResponseType.LongPress)
+          .accessibilityText('点按喜欢，长按选择回应表情')
+        if (this.canReply || (!this.loggedIn && this.topicState.length === 0)) {
+          Button('回复', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(40).fontSize(12)
+            .fontColor($r('app.color.accent')).enabled(!this.busy)
+            .onClick(() => { if (this.loggedIn) { this.onReply(this.post); } else { this.onLogin(); } })
         }
       }.width('100%')
       if (this.boosting && this.post.canBoost) {
@@ -278,7 +343,7 @@ struct TopicPostCard {
       }
       if (this.post.boosts.length > 0) {
         Column({ space: 8 }) {
-          ForEach(this.expandedBoosts ? this.post.boosts : this.post.boosts.slice(0, 8), (boost: Boost) => {
+          ForEach(this.expandedBoosts ? this.post.boosts : this.post.boosts.slice(0, 3), (boost: Boost) => {
             Row({ space: 6 }) {
               Text(boost.user?.username || '用户').fontSize(12).fontColor($r('app.color.text_secondary'))
               RichPostContent({ cooked: boost.cooked, compact: true, reduceMotion: this.reduceMotion,
@@ -287,19 +352,20 @@ struct TopicPostCard {
                 Button('删除', { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(12).height(40).enabled(!this.busy)
                   .onClick(() => { this.onDeleteBoost(this.post, boost); })
               }
-            }.padding(8).backgroundColor($r('app.color.selected_background')).borderRadius(12)
+            }.padding({ left: 8, right: 8, top: 4, bottom: 4 })
           }, (boost: Boost): string => boost.id.toString())
-          if (this.post.boosts.length > 8) {
-            Button(this.expandedBoosts ? '收起简评' : `更多简评（${this.post.boosts.length - 8}）`,
+          if (this.post.boosts.length > 3) {
+            Button(this.expandedBoosts ? '收起简评' : `更多简评（${this.post.boosts.length - 3}）`,
               { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(12)
               .onClick(() => { this.expandedBoosts = !this.expandedBoosts; })
           }
         }.width('100%')
       }
-    }.width('100%').alignItems(HorizontalAlign.Start).padding(this.compact ? 12 : 18)
+    }.width('100%').alignItems(HorizontalAlign.Start)
+      .padding(this.compact ? 10 : 16)
       .backgroundColor(this.highlighted ? $r('app.color.selected_background') :
         this.compact ? $r('app.color.page_background') : $r('app.color.surface'))
-      .borderRadius(this.compact ? 12 : 20)
+      .borderRadius(this.compact ? 6 : 0).id(`post_${this.post.postNumber}`)
   }
 }
 
@@ -336,8 +402,9 @@ export struct TopicPage {
   @Local pictureUrl: string = '';
   @Local savingPicture: boolean = false;
   @Local savingAttachment: boolean = false;
-  @Local pictureScale: number = 1;
-  private initialScale: number = 1;
+  @Local pictureUrls: string[] = [];
+  @Local pictureInitialIndex: number = 0;
+  private pictureScrollOffset: number = 0;
   private pendingNumber: number = 0;
   private generation: number = 0;
   private entered: boolean = false;
@@ -347,6 +414,33 @@ export struct TopicPage {
   private writeRequest: RequestCancellation | undefined = undefined;
   private readonly source: TopicRowsSource = new TopicRowsSource();
   private readonly scroller: Scroller = new Scroller();
+
+  @Computed
+  get originalAuthor(): string { return this.posts.find((post: Post): boolean => post.postNumber === 1)?.username || ''; }
+
+  @Monitor('showPicture')
+  pictureVisibilityChanged(): void {
+    const visible: boolean = this.showPicture;
+    if (!visible) {
+      setTimeout((): void => {
+        if (!this.showPicture && !this.hidden) {
+          this.scroller.scrollTo({ xOffset: 0, yOffset: this.pictureScrollOffset, animation: false });
+        }
+      }, 30);
+    }
+    try {
+      const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      void window.getLastWindow(context).then((main: window.Window): void => {
+        if (this.showPicture !== visible) { return; }
+        const background: string = visible ? '#FF000000' :
+          '#' + (context.resourceManager.getColorSync($r('app.color.page_background').id) >>> 0).toString(16).padStart(8, '0');
+        const foreground: string = visible ? '#FFFFFFFF' :
+          '#' + (context.resourceManager.getColorSync($r('app.color.text_primary').id) >>> 0).toString(16).padStart(8, '0');
+        void main.setWindowSystemBarProperties({ statusBarColor: background, navigationBarColor: background,
+          statusBarContentColor: foreground, navigationBarContentColor: foreground }).catch(() => {});
+      }).catch(() => {});
+    } catch { /* Viewing remains available without system bar customization. */ }
+  }
 
   @Monitor('treeView')
   treeViewChanged(): void { this.rebuild(); }
@@ -367,8 +461,11 @@ export struct TopicPage {
     this.generation++;
     this.posts = [];
     this.topic = undefined;
+    this.pictureScrollOffset = 0;
     this.showPicture = false;
     this.pictureUrl = '';
+    this.pictureUrls = [];
+    this.pictureInitialIndex = 0;
     this.showJump = false;
     this.topicOwnerId = 0;
     this.error = '';
@@ -678,11 +775,16 @@ export struct TopicPage {
     });
   }
 
-  private picture(url: string): void {
+  private picture(url: string, post?: Post): void {
     const safe: string = postContentUrl(url);
     if (!safe.startsWith('https://')) { this.error = '无法查看不安全的图片地址。'; return; }
+    const urls: string[] = post === undefined ? [] : parsePostContent(post.cooked)
+      .filter((block: PostBlock): boolean => block.kind === 'image' && block.url.startsWith('https://'))
+      .map((block: PostBlock): string => block.url);
+    this.pictureUrls = Array.from(new Set<string>(urls.concat([safe])));
+    this.pictureInitialIndex = this.pictureUrls.indexOf(safe);
     this.pictureUrl = safe;
-    this.pictureScale = 1;
+    this.pictureScrollOffset = this.scroller.currentOffset().yOffset;
     this.showPicture = true;
   }
 
@@ -800,29 +902,10 @@ export struct TopicPage {
     }.width('100%').padding(24).alignItems(HorizontalAlign.Start)
   }
 
-  @Builder
-  pictureSheet() {
-    Column({ space: 16 }) {
-      NativeForumImage({ url: this.pictureUrl, fit: ImageFit.Contain, accessibleLabel: '帖子原图',
-        ownerId: this.session.user?.id || 0, previewImageAspectRatio: 0 }).width('100%').layoutWeight(1)
-        .scale({ x: this.pictureScale, y: this.pictureScale })
-        .accessibilityText('帖子原图')
-        .gesture(PinchGesture().onActionStart((): void => { this.initialScale = this.pictureScale; })
-          .onActionUpdate((event: GestureEvent): void => {
-            this.pictureScale = Math.max(1, Math.min(5, this.initialScale * event.scale));
-          }))
-      Row({ space: 18 }) {
-        SaveButton({ icon: SaveIconStyle.FULL_FILLED, text: SaveDescription.SAVE_IMAGE, buttonType: ButtonType.Capsule })
-          .enabled(!this.savingPicture).onClick((_event: ClickEvent, result: SaveButtonOnClickResult): void => {
-            if (result === SaveButtonOnClickResult.SUCCESS) { this.savePicture(); }
-          })
-        Button('关闭', { buttonStyle: ButtonStyleMode.TEXTUAL }).onClick(() => { this.showPicture = false; })
-      }.width('100%').justifyContent(FlexAlign.Center)
-    }.width('100%').height('100%').padding({ left: 16, right: 16, top: 12, bottom: 24 })
-  }
 
   build() {
     NavDestination() {
+      Stack({ alignContent: Alignment.TopStart }) {
       Column() {
         if (this.error) {
           Column({ space: 8 }) {
@@ -835,33 +918,25 @@ export struct TopicPage {
           }.padding(16).backgroundColor($r('app.color.selected_background')).width('100%')
         }
         Refresh({ refreshing: $$this.refreshing }) {
-          List({ scroller: this.scroller, space: 10 }) {
+          List({ scroller: this.scroller, space: 0 }) {
             ListItem() {
-              Column({ space: 12 }) {
-                Text(this.topic?.title || (this.loading ? '正在打开话题' : '话题')).fontSize(27).fontWeight(FontWeight.Bold)
-                  .fontColor($r('app.color.text_primary')).width('100%')
-                Row({ space: 8 }) {
-                  Text(`${this.stream.length} 条帖子`).fontSize(13).fontColor($r('app.color.text_secondary'))
-                  if (this.topic?.closed || this.topic?.archived) {
-                    Text(this.topic?.archived ? '已归档' : '已关闭').fontSize(13).fontColor($r('app.color.text_secondary'))
-                  }
-                  Blank()
-                  Button(this.treeView ? '楼中楼' : '按楼层', { buttonStyle: ButtonStyleMode.TEXTUAL })
-                    .fontSize(13).height(40).onClick(() => { this.appearance.treeView = !this.treeView; })
-                }.width('100%')
-              }.width('100%').padding({ top: 20, left: 6, right: 6, bottom: 10 })
+              if (this.topic === undefined) {
+                Text(this.loading ? '正在打开帖子…' : '帖子').fontSize(18).fontColor($r('app.color.text_secondary')).padding(16)
+              } else { Blank().height(1) }
             }
+
             ListItem() {
               if (this.previousIds.length > 0) {
                 Button(`加载之前的楼层（${this.previousIds.length}）`, { buttonStyle: ButtonStyleMode.TEXTUAL })
                   .height(44).width('100%').enabled(!this.loading).onClick(() => { this.error = ''; this.loadSlice(true); })
               } else { Blank().height(1) }
             }
-            LazyForEach(this.source, (row: TopicTreeRow) => {
+            LazyForEach(this.source, (row: ObservedTopicTreeRow) => {
               ListItem() {
-                Column({ space: 6 }) {
-                  TopicPostCard({ post: row.post, compact: row.depth > 0, canReply: this.topic?.canReply || false,
-                    busy: this.writeBusy, highlighted: row.post.id === this.highlightedId,
+                Column({ space: 0 }) {
+                  TopicPostCard({ post: row.post, compact: row.depth > 0, topicTitle: this.topic?.title || '',
+                    authorUsername: this.originalAuthor, topicState: this.topic?.archived ? '已归档' : this.topic?.closed ? '已关闭' : '', canReply: this.topic?.canReply || false,
+                    busy: this.writeBusy, highlighted: row.post.postNumber > 1 && row.post.id === this.highlightedId,
                     reactions: this.topic?.validReactions || [], reduceMotion: this.appearance.reduceMotion,
                     loggedIn: this.session.user !== undefined, onLogin: this.onLogin,
                     onReply: (post: Post): void => { this.onCompose(this.topicId, post.postNumber, 0); },
@@ -872,13 +947,13 @@ export struct TopicPage {
                     onBoost: (post: Post, raw: string): Promise<boolean> => this.boost(post, raw),
                     onDeleteBoost: (post: Post, boost: Boost): void => { this.confirmDeleteBoost(post, boost); },
                     onOpenLink: (url: string): void => { this.openLink(url); },
-                    onPicture: (url: string): void => { this.picture(url); },
+                    onPicture: (url: string): void => { this.picture(url, row.post); },
                     onJump: (number: number): void => { this.jump(number); } })
                   if (this.treeView && row.lastInGroup && row.totalReplies > 0) {
                     Row() {
                       Button(this.loadingReplies.some((id: number): boolean => row.unloadedIds.includes(id)) ? '正在加载回复…' :
                         row.shownReplies >= row.loadedReplies && row.unloadedIds.every((id: number): boolean => this.completedReplies.includes(id)) ?
-                          `已显示 ${row.shownReplies} 条回复` : `查看全部 ${row.totalReplies} 条回复`,
+                          `已显示 ${row.shownReplies} 条楼中楼回复` : `共 ${row.totalReplies} 条回复 · 展开`,
                         { buttonStyle: ButtonStyleMode.TEXTUAL }).fontSize(13).height(44).layoutWeight(1)
                         .enabled(!this.loadingReplies.some((id: number): boolean => row.unloadedIds.includes(id)))
                         .onClick(() => { this.expandReplies(row); })
@@ -890,9 +965,20 @@ export struct TopicPage {
                             this.rebuild();
                           })
                       }
-                    }.width('100%').padding({ left: 8, right: 8 }).backgroundColor($r('app.color.surface')).borderRadius(12)
+                    }.width('100%').padding({ left: 8, right: 8 }).backgroundColor($r('app.color.page_background')).borderRadius(6)
                   }
-                }.width('100%').padding({ left: row.depth > 0 ? 10 : 0, right: row.depth > 0 ? 10 : 0 })
+                  if (row.post.postNumber === 1) {
+                    Row({ space: 8 }) {
+                      Text(`全部回复 · ${Math.max(0, this.stream.length - 1)}`).fontSize(15).fontWeight(FontWeight.Medium)
+                        .fontColor($r('app.color.text_primary')).layoutWeight(1)
+                      Button(this.treeView ? '楼中楼' : '按楼层', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(44).fontSize(12)
+                        .fontColor($r('app.color.accent')).onClick(() => { this.appearance.treeView = !this.treeView; })
+                    }.width('100%').padding({ left: 16, right: 12, top: 4 }).backgroundColor($r('app.color.page_background'))
+                  } else if (row.depth === 0 && row.lastInGroup) {
+                    Divider().color($r('app.color.divider')).margin({ left: 16, right: 16 })
+                  }
+                }.width('100%').padding({ left: row.depth > 0 ? 48 : 0, right: row.depth > 0 ? 16 : 0 })
+                  .backgroundColor($r('app.color.surface'))
               }
             }, (row: TopicTreeRow): string => `${row.post.id}-${row.rootId}-${row.depth}`)
             ListItem() {
@@ -908,31 +994,40 @@ export struct TopicPage {
                 }
               }.width('100%')
             }
-          }.width('100%').height('100%').padding({ left: 14, right: 14, bottom: 14 }).cachedCount(3)
+          }.width('100%').height('100%').contentEndOffset(12).cachedCount(3)
             .scrollBar(BarState.Off)
             .onScrollIndex((_start: number, end: number): void => {
               const row: TopicTreeRow | undefined = this.rows[Math.min(this.rows.length - 1, Math.max(0, end - 2))];
               if (row !== undefined) { this.currentNumber = row.post.postNumber; }
             })
-            .onReachEnd(() => { if (this.entered && !this.error) { this.loadSlice(false); } })
+            .onReachEnd(() => { if (this.entered && !this.showPicture && !this.error) { this.loadSlice(false); } })
         }.layoutWeight(1).onRefreshing(() => { this.reload(this.currentNumber); })
-        Row({ space: 12 }) {
-          Button(`#${this.currentNumber} · ${this.stream.length} 条`, { buttonStyle: ButtonStyleMode.TEXTUAL })
-            .id('topic_jump')
-            .height(48).fontSize(13).fontColor($r('app.color.text_secondary')).layoutWeight(1)
+        Row({ space: 10 }) {
+          Button(this.topic?.archived ? '帖子已归档' : this.topic?.closed ? '帖子已关闭' : this.session.user === undefined ? '登录后参与讨论' : this.topic?.canReply ? '说点什么…' : '暂无回复权限', { type: ButtonType.Capsule })
+            .height(44).layoutWeight(1).fontSize(14).fontColor($r('app.color.text_secondary'))
+            .backgroundColor($r('app.color.page_background')).id('topic_reply_entry')
+            .enabled(!this.writeBusy && this.topic !== undefined && !this.topic.closed && !this.topic.archived && (this.session.user === undefined || this.topic.canReply))
+            .onClick(() => { if (this.signedIn()) { this.onCompose(this.topicId, 0, 0); } })
+          Button(`#${this.currentNumber}`, { buttonStyle: ButtonStyleMode.TEXTUAL })
+            .id('topic_jump').height(44).width(68).fontSize(13).fontColor($r('app.color.text_secondary'))
+            .accessibilityText(`楼层导航，当前第${this.currentNumber}楼，共${this.stream.length}条内容`)
             .onClick(() => { this.jumpInput = this.currentNumber.toString(); this.showJump = true; })
             .bindSheet(this.showJump, this.jumpSheet, { height: SheetSize.MEDIUM, dragBar: true,
               backgroundColor: $r('app.color.surface'), onDisappear: (): void => { this.showJump = false; } })
-          Button(this.session.user === undefined ? '登录后回复' : '回复话题', { type: ButtonType.Capsule }).height(48).layoutWeight(1)
-            .backgroundColor($r('app.color.accent')).fontColor($r('app.color.on_accent'))
-            .enabled(!this.writeBusy && (this.session.user === undefined || this.topic?.canReply === true))
-            .onClick(() => { if (this.signedIn()) { this.onCompose(this.topicId, 0, 0); } })
-        }.width('100%').padding({ left: 18, right: 18, top: 10, bottom: 12 })
+        }.width('100%').padding({ left: 14, right: 8, top: 8, bottom: 8 })
           .backgroundColor($r('app.color.surface')).systemMaterial(materialFor(this.appearance))
       }.width('100%').height('100%')
-        .bindSheet(this.showPicture, this.pictureSheet, { height: SheetSize.LARGE, dragBar: true,
-          backgroundColor: $r('app.color.page_background'), onDisappear: (): void => { this.showPicture = false; } })
-    }.title('话题').backgroundColor($r('app.color.page_background'))
+      if (this.showPicture) {
+        ForumImageViewer({ urls: this.pictureUrls, initialIndex: this.pictureInitialIndex,
+          ownerId: this.session.user?.id || 0, saving: this.savingPicture,
+          onClose: (): void => { this.showPicture = false; },
+          onSave: (url: string): void => { this.pictureUrl = url; void this.savePicture(); },
+          onIndexChange: (index: number): void => { this.pictureUrl = this.pictureUrls[index] || ''; } })
+          .width('100%').height('100%').zIndex(10)
+      }
+      }.width('100%').height('100%')
+    }.title('帖子').hideTitleBar(this.showPicture).backgroundColor($r('app.color.page_background'))
+      .onBackPressed((): boolean => { if (this.showPicture) { this.showPicture = false; return true; } return false; })
       .onShown(() => {
         this.hidden = false;
         this.loading = false;
@@ -941,6 +1036,6 @@ export struct TopicPage {
         this.entered = true;
         this.reload(number);
       })
-      .onHidden(() => { this.hidden = true; this.generation++; this.loading = false; this.refreshing = false; })
+      .onHidden(() => { this.showPicture = false; this.hidden = true; this.generation++; this.loading = false; this.refreshing = false; })
   }
 }

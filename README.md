@@ -9,9 +9,11 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 基于 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的真实功能与 Discourse 接口，以 ArkTS / ArkUI V2 重构的鸿蒙原生客户端。固定参考提交 `e31fe8e3a06a5de2e9c013925dd1c40a7743d30e`，源代码版本 1.1.1。
 
-本地应用版本 `0.1.2`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
+本地应用版本 `0.2.0`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
 
 0.1.1 收紧首页、分类和搜索的信息密度：话题标题最多两行，缩小卡片留白；分类等级与名称同排。分类详情移除了重复标题和不适用的底部页签预留，列表用满可用高度。首页和搜索仅在滚动末端为浮动页签留空间。
+
+0.2.0 重排帖子阅读页：作者与楼主标记在标题上方，主楼正文与图片铺满内容栏，回复改为连续列表，楼中楼以浅底区域呈现。底部固定“说点什么”入口和楼层导航；喜欢直接点按、其他回应长按选择，编辑/删除/简评/解决方案收在更多菜单。图片按原始宽高展示，长图有大预览；点开后黑底全屏，同楼层图片左右切换，支持双击和双指缩放、放大后平移，返回保持阅读位置。
 
 ## 应用图标
 
@@ -93,7 +95,7 @@ npm install --prefix .local-test-runtime --no-save --package-lock=false --ignore
 DEVECO_TYPESCRIPT_PATH="$PWD/.local-test-runtime/node_modules/typescript/lib/typescript.js" node --test tests/*.test.mjs
 ```
 
-GitHub Actions 使用相同的 TypeScript 4.9.5 和 Node 22 运行45项 fixture；测试只读取源码和编译运行时，不访问真实论坛或设备存储。它不编译 ArkUI、不登录论坛，不替代 SDK 编译及设备验收。
+GitHub Actions 使用相同的 TypeScript 4.9.5 和 Node 22 运行64项 fixture；测试只读取源码和编译运行时，不访问真实论坛或设备存储。它不编译 ArkUI、不登录论坛，不替代 SDK 编译及设备验收。
 
 本机 `app/build-profile.json5` 不进入 Git；仓库提供无凭据的 `build-profile.example.json5`，首次执行 build.sh 会复制模板。需要安装到自己的设备时，以自己的开发者账号生成包含目标设备的调试签名：
 

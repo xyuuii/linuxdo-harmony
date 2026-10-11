@@ -33,7 +33,7 @@ function withoutImports(value) {
 }
 
 function load(value, bindings = {}) {
-  const compiled = ts.transpileModule(value, {
+  const compiled = ts.transpileModule(value.replace(/^@ObservedV2\s*$/gm, '').replace(/@Trace /g, ''), {
     fileName: 'production-extract.ts',
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
     reportDiagnostics: true

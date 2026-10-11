@@ -23,6 +23,8 @@ export interface PostBlock {
   url: string;
   description: string;
   heading: boolean;
+  imageWidth: number;
+  imageHeight: number;
 }
 
 interface InlineStyle {
@@ -102,7 +104,7 @@ export function parsePostContent(cooked: string): PostBlock[] {
   const flush = (): void => {
     if (runs.some((run: PostInline): boolean => run.text.trim().length > 0 || run.emojiUrl.length > 0)) {
       blocks.push({ key: `block-${blocks.length}`, kind: preDepth > 0 ? 'code' : 'paragraph',
-        runs: runs, quote: quoteDepth > 0, url: '', description: '', heading: heading });
+        runs: runs, quote: quoteDepth > 0, url: '', description: '', heading: heading, imageWidth: 0, imageHeight: 0 });
     }
     runs = [];
   };
@@ -145,7 +147,7 @@ export function parsePostContent(cooked: string): PostBlock[] {
     if (tag === 'hr') {
       flush();
       blocks.push({ key: `block-${blocks.length}`, kind: 'divider', runs: [], quote: false,
-        url: '', description: '', heading: false });
+        url: '', description: '', heading: false, imageWidth: 0, imageHeight: 0 });
       continue;
     }
     if (tag === 'img' && !closing) {
@@ -161,15 +163,21 @@ export function parsePostContent(cooked: string): PostBlock[] {
       const height: number = Number(attribute(token, 'height'));
       // Discourse onebox headers use a 32 px site icon, separate from their large thumbnail.
       const siteIcon: boolean = classes.includes('site-icon') && width > 0 && width <= 40 && height > 0 && height <= 40;
-      const alt: string = decodePostEntities(attribute(token, 'alt')) || (siteIcon ? '链接图标' : emoji ? '表情' : '帖子图片');
+      const alt: string = decodePostEntities(attribute(token, 'alt')) || (siteIcon ? '链接图标' : emoji ? '表情' : '');
       if (emoji || siteIcon) {
         append(alt, imageUrl);
       } else if (imageUrl) {
         flush();
         const href: string = styles[styles.length - 1].href;
         const original: string = /\/(?:uploads|user_avatar)\//.test(href) || /\.(?:jpe?g|png|gif|webp|avif|heic)(?:[?#]|$)/i.test(href) ? href : imageUrl;
+        const originalWidth: number = Number(attribute(token, 'data-orig-width'));
+        const originalHeight: number = Number(attribute(token, 'data-orig-height'));
+        const hasOriginalSize: boolean = originalWidth > 0 && originalHeight > 0 &&
+          Number.isFinite(originalWidth) && Number.isFinite(originalHeight);
         blocks.push({ key: `block-${blocks.length}`, kind: 'image', runs: [], quote: quoteDepth > 0,
-          url: original, description: alt, heading: false });
+          url: original, description: alt, heading: false,
+          imageWidth: hasOriginalSize ? originalWidth : Number.isFinite(width) && width > 0 ? width : 0,
+          imageHeight: hasOriginalSize ? originalHeight : Number.isFinite(height) && height > 0 ? height : 0 });
       } else { append(alt); }
       continue;
     }
@@ -209,6 +217,73 @@ export function parsePostContent(cooked: string): PostBlock[] {
   }
   flush();
   return blocks;
+}
+
+export interface PostImageLayout {
+  previewHeight: number;
+  imageHeight: number;
+  cropped: boolean;
+}
+
+/** Match the actual body width instead of squeezing every picture into a square. */
+export function postImageLayout(width: number, height: number, availableWidth: number, compact: boolean): PostImageLayout {
+  const bodyWidth: number = Number.isFinite(availableWidth) && availableWidth > 0 ? availableWidth : 320;
+  const ratio: number = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 ? width / height : 4 / 3;
+  const imageHeight: number = bodyWidth / ratio;
+  const limit: number = bodyWidth * (compact ? 1 : 2);
+  return { previewHeight: Math.min(imageHeight, limit), imageHeight: imageHeight, cropped: imageHeight > limit };
+}
+
+@ComponentV2
+struct PostContentImage {
+  @Param url: string = '';
+  @Param description: string = '';
+  @Param sourceWidth: number = 0;
+  @Param sourceHeight: number = 0;
+  @Param compact: boolean = false;
+  @Param ownerId: number = 0;
+  @Event onPicture: (url: string) => void = (_url: string): void => {};
+  @Local bodyWidth: number = 320;
+  @Local naturalWidth: number = 0;
+  @Local naturalHeight: number = 0;
+
+  @Monitor('url', 'ownerId')
+  imageChanged(): void {
+    this.naturalWidth = 0;
+    this.naturalHeight = 0;
+  }
+  @Computed
+  get imageLayout(): PostImageLayout {
+    return postImageLayout(this.naturalWidth || this.sourceWidth, this.naturalHeight || this.sourceHeight,
+      this.bodyWidth, this.compact);
+  }
+
+  build() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      NativeForumImage({ url: this.url, fit: ImageFit.Contain, previewImageAspectRatio: 0,
+        accessibleLabel: this.description || '帖子图片', ownerId: this.ownerId,
+        onNaturalSize: (width: number, height: number): void => {
+          if (this.naturalWidth !== width || this.naturalHeight !== height) {
+            this.naturalWidth = width;
+            this.naturalHeight = height;
+          }
+        } })
+        .width('100%').height(this.imageLayout.imageHeight)
+      if (this.imageLayout.cropped) {
+        Row() {
+          Text('长图 · 点击查看完整图片').fontSize(12).fontColor(Color.White).padding({ left: 12, right: 12 })
+        }.width('100%').height(30).backgroundColor('#99000000')
+          .position({ x: 0, y: this.imageLayout.previewHeight - 30 })
+      }
+    }.width('100%').height(this.imageLayout.previewHeight).clip(true).borderRadius(8)
+      .backgroundColor($r('app.color.selected_background'))
+      .accessibilityText((this.description ? this.description + '，' : '') + '点击查看大图')
+      .onAreaChange((_oldArea: Area, newArea: Area): void => {
+        const width: number = Number(newArea.width);
+        if (Number.isFinite(width) && width > 0 && Math.abs(this.bodyWidth - width) > 0.5) { this.bodyWidth = width; }
+      })
+      .onClick((): void => this.onPicture(this.url))
+  }
 }
 
 @ComponentV2
@@ -270,13 +345,10 @@ export struct RichPostContent {
         if (block.kind === 'divider') {
           Divider().color($r('app.color.divider')).margin({ top: 8, bottom: 8 })
         } else if (block.kind === 'image') {
-          Column({ space: 5 }) {
-            NativeForumImage({ url: block.url, fit: ImageFit.Contain, accessibleLabel: block.description,
-              ownerId: this.session.user?.id || 0 })
-              .width('100%').constraintSize({ maxHeight: this.compact ? 180 : 440 }).borderRadius(12)
-              .accessibilityText(block.description).onClick(() => { this.onPicture(block.url); })
-            Text(block.description).fontSize(12).fontColor($r('app.color.text_secondary')).maxLines(2)
-          }.width('100%')
+          PostContentImage({ url: block.url, description: block.description,
+            sourceWidth: block.imageWidth, sourceHeight: block.imageHeight,
+            compact: this.compact, ownerId: this.session.user?.id || 0,
+            onPicture: (url: string): void => this.onPicture(url) }).width('100%')
         } else {
           Text() {
             ForEach(block.runs, (run: PostInline) => {

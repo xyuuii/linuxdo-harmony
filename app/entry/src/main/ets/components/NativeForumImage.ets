@@ -3,6 +3,14 @@ import { ForumSession, forumSession } from '../models/ForumSession';
 import { forumApi, RequestCancellation, ForumApiError, ForumErrorKind } from '../services/ForumApi';
 import { loadForumMedia, invalidateForumMedia } from '../services/ForumMedia';
 
+interface LoadedImageIdentity {
+  uri: string;
+  source: string;
+  ownerId: number;
+  generation: number;
+  revision: number;
+}
+
 @ComponentV2
 export struct NativeForumImage {
   @Param url: string = '';
@@ -10,6 +18,7 @@ export struct NativeForumImage {
   @Param ownerId: number = forumSession.user?.id || 0;
   @Param accessibleLabel: string = '图片';
   @Param previewImageAspectRatio: number = 1;
+  @Event onNaturalSize: (width: number, height: number) => void = (_width: number, _height: number): void => {};
   @Local sessionRef: ForumSession = forumSession;
   @Local cachedUri: string = '';
   @Local loading: boolean = false;
@@ -18,6 +27,8 @@ export struct NativeForumImage {
   private context: common.UIAbilityContext | undefined = undefined;
   private loadTimer: number = -1;
   private live: boolean = false;
+  private imageGeneration: number = -1;
+  private imageRevision: number = -1;
   private resetHandler: () => void = (): void => this.clearImage();
 
   aboutToAppear(): void {
@@ -38,6 +49,8 @@ export struct NativeForumImage {
     this.request?.cancel();
     this.request = undefined;
     this.cachedUri = '';
+    this.imageGeneration = -1;
+    this.imageRevision = -1;
     this.loading = false;
     this.failed = false;
   }
@@ -61,6 +74,8 @@ export struct NativeForumImage {
       const uri: string = await loadForumMedia(url, context, cancellation);
       if (this.live && this.request === cancellation && this.url === url && this.ownerId === owner &&
         (this.sessionRef.user?.id || 0) === owner && forumApi.getSessionGeneration() === generation) {
+        this.imageGeneration = generation;
+        this.imageRevision = this.sessionRef.revision;
         this.cachedUri = uri;
       }
     } catch (error) {
@@ -69,21 +84,40 @@ export struct NativeForumImage {
       }
     } finally { if (this.request === cancellation) { this.loading = false; } }
   }
-  private decodeFailed(): void {
+  private matchesDecodedImage(identity: LoadedImageIdentity): boolean {
+    return this.live && this.cachedUri === identity.uri && this.url === identity.source &&
+      this.ownerId === identity.ownerId && (this.sessionRef.user?.id || 0) === identity.ownerId &&
+      this.imageGeneration === identity.generation && forumApi.getSessionGeneration() === identity.generation &&
+      this.imageRevision === identity.revision && this.sessionRef.revision === identity.revision;
+  }
+  private naturalSize(width: number, height: number, identity: LoadedImageIdentity): void {
+    if (this.matchesDecodedImage(identity) && Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+      this.onNaturalSize(width, height);
+    }
+  }
+  private decodeFailed(identity: LoadedImageIdentity): void {
+    if (!this.matchesDecodedImage(identity)) { return; }
     this.cachedUri = '';
     this.failed = true;
-    if (this.context) { void invalidateForumMedia(this.url, this.context); }
+    if (this.context) { void invalidateForumMedia(identity.source, this.context); }
+  }
+
+  @Builder
+  private decodedImage(identity: LoadedImageIdentity) {
+    Image(identity.uri)
+      .width('100%')
+      .height('100%')
+      .objectFit(this.fit)
+      .accessibilityText(this.accessibleLabel)
+      .onComplete((event): void => this.naturalSize(event?.width || 0, event?.height || 0, identity))
+      .onError((): void => this.decodeFailed(identity))
   }
 
   @Builder
   private imageContent() {
     if (this.cachedUri && this.ownerId === (this.sessionRef.user?.id || 0)) {
-      Image(this.cachedUri)
-        .width('100%')
-        .height('100%')
-        .objectFit(this.fit)
-        .accessibilityText(this.accessibleLabel)
-        .onError((): void => this.decodeFailed())
+      this.decodedImage({ uri: this.cachedUri, source: this.url, ownerId: this.ownerId,
+        generation: this.imageGeneration, revision: this.imageRevision })
     } else if (this.loading) {
       LoadingProgress().width(24).height(24).color($r('sys.color.brand'))
         .accessibilityText('正在加载' + this.accessibleLabel)
