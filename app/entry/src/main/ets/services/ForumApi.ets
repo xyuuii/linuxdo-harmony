@@ -2,16 +2,16 @@ import { http } from '@kit.NetworkKit';
 import { webview } from '@kit.ArkWeb';
 import { BusinessError } from '@kit.BasicServicesKit';
 import {
-  Topic, Category, DiscourseUser, Post, Boost, TopicDetail, TopicListItem, TopicPage,
+  Topic, Category, DiscourseUser, Post, Boost, TopicDetail, TopicListItem, TopicPage, TopicFeedFilter,
   SearchPage, SearchOrder, NotificationFilter, ForumNotification, NotificationPage, UnreadSummary,
-  ProfileSection, ProfileOrder, ProfilePage, ProfileEntry, ProfileField, UploadedFile,
+  ProfileSection, ProfileOrder, ProfilePage, ProfileEntry, ProfileField, UploadedFile, TopicCreationResult,
   flattenCategories, notificationIncludes, measureBoost, safeForumUrl
 } from '../models/ForumModels';
 import {
   TopicListResponseWire, CategoryResponseWire, CurrentUserWire, TopicDetailWire, PostStreamResponseWire,
   SearchResponseWire, PostWire, PostResponseWire, BoostWire, NotificationResponseWire, CsrfWire,
   UploadResponseWire, LoginResponseWire, UserResponseWire, SummaryResponseWire, SummaryWire, EmailsWire,
-  ActionsResponseWire, ActionWire, UserWire, EmojiWire,
+  ActionsResponseWire, ActionWire, UserWire, EmojiWire, TopicCreationWire,
   decodeObject, decodeArray, text, numberValue, bool, list, plainText, topicFromWire, userFromWire,
   categoryFromWire, detailFromWire, postFromWire, boostFromWire, streamFromWire, notificationFromWire
 } from './ForumWire';
@@ -69,6 +69,8 @@ interface PasswordLoginBody { login: string; password: string; second_factor_met
 interface EmailLoginBody { login: string; }
 interface TwoFactorBody { second_factor_token?: string; second_factor_method: number; }
 interface CreatePostBody { raw: string; topic_id: number; reply_to_post_number?: number; }
+interface CreateTopicTagBody { name: string; }
+interface CreateTopicBody { title: string; raw: string; category: number; tags: CreateTopicTagBody[]; nested_post: boolean; }
 interface RawPostBody { raw: string; }
 interface EditPostBody { post: RawPostBody; }
 interface IdBody { id: number; }
@@ -88,13 +90,13 @@ function validateRaw(raw: string): string {
 function metric(value: number | undefined): string {
   return typeof value === 'number' && Number.isFinite(value) ? String(value) : '—';
 }
-function notificationServerTypes(filter: NotificationFilter): string {
-  if (filter === NotificationFilter.Replies) { return 'mentioned,replied,quoted,group_mentioned,chat_quoted,boost'; }
-  if (filter === NotificationFilter.Likes) { return 'liked,liked_consolidated,reaction'; }
-  if (filter === NotificationFilter.Messages) { return 'private_message,invited_to_private_message,group_message_summary'; }
-  return '';
+function serverValidationMessage(raw: string): string {
+  try {
+    const response: TopicCreationWire = decodeObject<TopicCreationWire>(raw);
+    const errors: string[] = list(response.errors).filter((value: string): boolean => typeof value === 'string');
+    return plainText(errors.join('；') || text(response.error)).slice(0, 600);
+  } catch { return ''; }
 }
-
 export class ForumApi {
   private categoryCache: Category[] | undefined = undefined;
   private categoryInFlight: Promise<Category[]> | undefined = undefined;
@@ -272,7 +274,8 @@ export class ForumApi {
     if (status >= 300 && status < 400) { throw new ForumApiError(ForumErrorKind.VerificationRequired, status, '社区要求网页跳转，请在网页中完成登录或验证'); }
     if (status < 200 || status >= 300) {
       throw new ForumApiError(writing && status >= 500 ? ForumErrorKind.UnknownResult : ForumErrorKind.Rejected,
-        status, writing && status >= 500 ? '提交结果未确认，请刷新后检查' : '社区拒绝了此次请求，请检查输入与权限');
+        status, writing && status >= 500 ? '提交结果未确认，请刷新后检查' :
+          serverValidationMessage(response.body) || '社区拒绝了此次请求，请检查输入与权限');
     }
   }
 
@@ -340,6 +343,14 @@ export class ForumApi {
     return categories;
   }
   cachedCategories(): Category[] { return this.categoryCache ?? []; }
+  async fetchCreateTopicCategories(cancellation?: RequestCancellation): Promise<Category[]> {
+    const generation: number = this.sessionGeneration;
+    // Permissions are account-scoped and can change while the composer is open.
+    const categories: Category[] = await this.fetchCategories(true, cancellation);
+    this.ensureSessionGeneration(generation);
+    if (cancellation?.isCancelled) { throw cancelledError(); }
+    return flattenCategories(categories).filter((category: Category): boolean => category.canCreateTopic === true);
+  }
   private topicPage(response: TopicListResponseWire): TopicPage {
     if (!response.topic_list || !Array.isArray(response.topic_list.topics)) {
       throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区未返回话题列表');
@@ -356,8 +367,26 @@ export class ForumApi {
     return { items: items, hasMore: text(response.topic_list.more_topics_url).length > 0 && items.length > 0 };
   }
   async fetchLatest(page: number = 0, cancellation?: RequestCancellation): Promise<TopicPage> {
+    return this.fetchTopicFeed(TopicFeedFilter.Latest, page, cancellation);
+  }
+  async fetchTopicFeed(filter: TopicFeedFilter, page: number = 0, cancellation?: RequestCancellation): Promise<TopicPage> {
     validateCursor(page);
-    return this.topicPage(this.parse<TopicListResponseWire>(await this.get(`/latest.json?page=${page}`, cancellation)));
+    if (filter !== TopicFeedFilter.Latest && filter !== TopicFeedFilter.New && filter !== TopicFeedFilter.Unread &&
+      filter !== TopicFeedFilter.Hot && filter !== TopicFeedFilter.Top) {
+      throw new ForumApiError(ForumErrorKind.Rejected, 0, '话题筛选不受支持');
+    }
+    // Discourse exposes each filter as its own list route. Keep top's period
+    // fixed across pagination instead of letting the server infer it per visit.
+    const period: string = filter === TopicFeedFilter.Top ? '&period=weekly' : '';
+    try {
+      return this.topicPage(this.parse<TopicListResponseWire>(await this.get(`/${filter}.json?page=${page}${period}`, cancellation)));
+    } catch (error) {
+      if (error instanceof ForumApiError && error.kind === ForumErrorKind.NotFound) {
+        throw new ForumApiError(ForumErrorKind.Unsupported, error.status, '社区暂未开放此话题筛选，请切换其他标签。');
+      }
+      if (error instanceof Error) { throw error; }
+      throw new ForumApiError(ForumErrorKind.Network, 0, '话题暂时无法加载，请稍后重试。');
+    }
   }
   private canonicalCategoryPath(categoryId: number, categories: Category[]): string {
     const byId: Map<number, Category> = new Map<number, Category>();
@@ -448,28 +477,35 @@ export class ForumApi {
     cancellation?: RequestCancellation): Promise<NotificationPage> {
     const generation: number = this.sessionGeneration;
     validateCursor(offset);
-    const types: string = notificationServerTypes(filter);
-    const typeQuery: string = types ? '&filter_by_types=' + encodeURIComponent(types) : '';
     const notifications: ForumNotification[] = [];
     const seen: Set<number> = new Set<number>();
     let nextOffset: number = offset;
     let hasMore: boolean = true;
     let rounds: number = 0;
-    while (hasMore && notifications.length < 20 && rounds < 5) {
+    // Discourse only applies filter_by_types to recent=true, which has no history
+    // pagination. History is filtered locally; stop at the first matching page.
+    // A bounded empty batch with hasMore=true must remain resumable by the caller.
+    while (hasMore && notifications.length === 0 && rounds < 5) {
+      if (cancellation?.isCancelled) { throw cancelledError(); }
       rounds++;
       const response: NotificationResponseWire = this.parse<NotificationResponseWire>(
-        await this.get(`/notifications.json?offset=${nextOffset}&limit=60${typeQuery}`, cancellation));
+        await this.get(`/notifications.json?offset=${nextOffset}&limit=60`, cancellation));
       this.ensureSessionGeneration(generation);
+      if (cancellation?.isCancelled) { throw cancelledError(); }
       if (!Array.isArray(response.notifications)) { throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区未返回通知列表'); }
       nextOffset += 60;
       const total: number = numberValue(response.total_rows_notifications, -1);
       hasMore = total >= 0 ? nextOffset < total : response.notifications.length >= 60;
+      let freshCount: number = 0;
       response.notifications.forEach((wire): void => {
         const notification: ForumNotification = notificationFromWire(wire);
-        if (!seen.has(notification.id) && notificationIncludes(filter, notification.type)) {
-          seen.add(notification.id); notifications.push(notification);
-        }
+        if (seen.has(notification.id)) { return; }
+        seen.add(notification.id); freshCount++;
+        if (notificationIncludes(filter, notification.type)) { notifications.push(notification); }
       });
+      if (response.notifications.length > 0 && freshCount === 0) {
+        throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '通知分页未推进，请稍后刷新');
+      }
     }
     return { notifications: notifications, hasMore: hasMore, nextOffset: nextOffset };
   }
@@ -524,6 +560,45 @@ export class ForumApi {
     const body: CreatePostBody = { topic_id: topicId, raw: validateRaw(raw) };
     if (replyToPostNumber !== undefined) { validateId(replyToPostNumber); body.reply_to_post_number = replyToPostNumber; }
     return postFromWire(this.parse<PostWire>(await this.mutate('/posts.json', http.RequestMethod.POST, JSON.stringify(body), cancellation)));
+  }
+  async createTopic(title: string, raw: string, categoryId: number, tags: string[] = [],
+    cancellation?: RequestCancellation): Promise<TopicCreationResult> {
+    const generation: number = this.sessionGeneration;
+    validateId(categoryId);
+    const cleanTitle: string = title.trim();
+    const cleanRaw: string = raw.trim();
+    if (cleanTitle.length === 0) { throw new ForumApiError(ForumErrorKind.Rejected, 0, '标题不能为空'); }
+    if (cleanRaw.length === 0) { throw new ForumApiError(ForumErrorKind.Rejected, 0, '正文不能为空'); }
+    const names: string[] = [];
+    tags.forEach((tag: string): void => {
+      const name: string = tag.trim();
+      if (name.length > 0 && !names.includes(name)) { names.push(name); }
+    });
+    const body: CreateTopicBody = { title: cleanTitle, raw: cleanRaw, category: categoryId,
+      tags: names.map((name: string): CreateTopicTagBody => { return { name: name }; }), nested_post: true };
+    const rawResponse: string = await this.mutate('/posts.json', http.RequestMethod.POST, JSON.stringify(body), cancellation);
+    this.ensureSessionGeneration(generation);
+    if (cancellation?.isCancelled) { throw cancelledError(); }
+    let response: TopicCreationWire;
+    try { response = decodeObject<TopicCreationWire>(rawResponse); }
+    catch { throw new ForumApiError(ForumErrorKind.UnknownResult, 0, '发帖结果未确认，请先检查个人话题，避免重复发布'); }
+    const validationMessage: string = serverValidationMessage(rawResponse);
+    if (response.success === false || validationMessage.length > 0) {
+      throw new ForumApiError(ForumErrorKind.Rejected, 0, validationMessage || '社区拒绝了此次发帖，请检查输入与权限');
+    }
+    if (response.action === 'enqueued' && response.success === true) {
+      return { queued: true, topicId: 0, postNumber: 0,
+        pendingCount: Math.max(0, numberValue(response.pending_count)) };
+    }
+    const post: PostWire = response.post ?? response;
+    const topicId: number = numberValue(post.topic_id);
+    const postId: number = numberValue(post.id);
+    if ((response.action === undefined || response.action === 'create_post') &&
+      (response.post === undefined || response.success === true) &&
+      Number.isSafeInteger(topicId) && topicId > 0 && Number.isSafeInteger(postId) && postId > 0 && post.post_number === 1) {
+      return { queued: false, topicId: topicId, postNumber: 1, pendingCount: 0 };
+    }
+    throw new ForumApiError(ForumErrorKind.UnknownResult, 0, '发帖结果未确认，请先检查个人话题，避免重复发布');
   }
   async updatePost(postId: number, raw: string, cancellation?: RequestCancellation): Promise<Post> {
     validateId(postId);

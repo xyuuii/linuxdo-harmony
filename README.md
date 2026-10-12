@@ -9,9 +9,11 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 基于 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的真实功能与 Discourse 接口，以 ArkTS / ArkUI V2 重构的鸿蒙原生客户端。固定参考提交 `e31fe8e3a06a5de2e9c013925dd1c40a7743d30e`，源代码版本 1.1.1。
 
-本地应用版本 `0.2.9`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
+当前应用版本 `0.3.0`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
 
-调试包：[0.2.9 GitHub Release](https://github.com/xyuuii/linuxdo-harmony/releases/tag/v0.2.9) · [下载 HAP](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.9/LinuxDo-HarmonyOS7-0.2.9-debug.hap) · [SHA256 校验文件](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.2.9/SHA256SUMS)。这是开发调试签名包，安装受签名设备授权限制；其他设备请按下方构建说明使用自己的开发者签名。二进制保存在 Release 附件中。
+调试包：[0.3.0 GitHub Release](https://github.com/xyuuii/linuxdo-harmony/releases/tag/v0.3.0) · [下载 HAP](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.3.0/LinuxDo-HarmonyOS7-0.3.0-debug.hap) · [SHA256 校验文件](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.3.0/SHA256SUMS)。这是开发调试签名包，安装受签名设备授权限制；其他设备请按下方构建说明使用自己的开发者签名。二进制保存在 Release 附件中。
+
+0.3.0 更新五入口导航、首页连续滑动分页、独立页面缓存、通知分类筛选及原生新建话题编辑器。布局参考官方 iOS 客户端与鸿蒙 IT之家，玻璃材质减淡并去掉多余投影；发布、草稿及键盘布局沿用鸿蒙原生交互。感谢社区佬友 [@xmk2025](https://linux.do/u/xmk2025) 的[原帖](https://linux.do/t/topic/2998703)与 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 提供功能参考。本项目认可并链接 [LINUX DO 社区](https://linux.do/)；这是独立的第三方客户端，与社区官方客户端区分。
 
 0.1.1 收紧首页、分类和搜索的信息密度：话题标题最多两行，缩小卡片留白；分类等级与名称同排。分类详情移除了重复标题和不适用的底部页签预留，列表用满可用高度。首页和搜索仅在滚动末端为浮动页签留空间。
 
@@ -35,7 +37,7 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 0.2.9 补充真实握姿诊断状态与前后台订阅日志，避免把保留的按钮位置当成当前识别结果。Pura X View已保留数据安装并验证首页回顶刷新、触点流光、简评、喜欢及撤销、半屏回复键盘与深浅色/高对比样式；系统握姿订阅成功并返回未握持，真实左右换手还待触发，不能用自动点击替代。
 
-首页、分类、搜索和我的使用 AdaptiveNavigationBar 主导航：向下浏览时，同一个材质胶囊连续收拢为当前页图标按钮，默认靠右并可随明确握姿侧别调整；反向滚动或点击按钮连续展开为四个页签。表面与图标节点保持，文字随收拢渐隐，列表阅读位置保持。开启减少动态效果或高对比时，主导航保持展开。
+话题、分类、搜索、消息和我的使用 AdaptiveNavigationBar 五入口主导航，消息角标使用真实未读数。向下浏览时，同一个材质胶囊连续收拢为当前页图标按钮，默认靠右并可随明确握姿侧别调整；反向滚动或点击按钮连续展开。表面与图标节点保持，文字随收拢渐隐，五页阅读位置分别保留。开启减少动态效果或高对比时，主导航保持展开。主页面横滑切换关闭：首页左右滑动只切顶部最新/新/未读/热门/排行，底栏入口通过点击切换。
 
 ## 应用图标
 
@@ -45,50 +47,60 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 ## 界面预览
 
+0.3.0 当前界面（CodexPhone / HarmonyOS 7 模拟器，真实接口内容）：
+
+| 首页与五入口 | 分类目录 |
+| --- | --- |
+| <img src="docs/screenshots/home-0.3.0.png" width="260" alt="首页文字标签、连续列表和五入口" /> | <img src="docs/screenshots/categories-0.3.0.png" width="260" alt="分类目录" /> |
+
+| 公开帖子详情 | 新建话题 |
+| --- | --- |
+| <img src="docs/screenshots/topic-0.3.0.png" width="260" alt="公开帖子原生阅读页" /> | <img src="docs/screenshots/editor-0.3.0.png" width="260" alt="接近全屏的新建话题编辑器" /> |
+
 | 四档沉浸光感 | 深色与高对比 |
 | --- | --- |
 | <img src="docs/screenshots/effect-levels.png" width="260" alt="四档光感设置" /> | <img src="docs/screenshots/dark-appearance.png" width="260" alt="深色外观设置" /> |
 
-截图仅展示外观设置。信息密度更新后，分类目录同屏约6组，话题同屏约6～7条，实际数量随标题长度和字体设置变化。
+截图仅作界面展示，论坛内容权利归原作者。实际信息密度随设备、标题长度和字体设置变化。
 
 ## 功能
 
 | 页面 / 流程 | 实现 |
 | --- | --- |
-| 最新 | 真实话题、作者、分类、回复数及浏览量；分页、下拉刷新、双击已选最新回顶刷新、紧凑可展开置顶、前台可选自动刷新 |
+| 话题 | 最新 / 新 / 未读 / 热门 / 本周排行；标题优先连续列表、分类与标签、头像、总回复数和时间；分页、下拉刷新、双击话题入口回顶刷新当前筛选、可展开置顶、前台可选自动刷新 |
 | 分类 | 真实分类树、同名 Lv 子分类分组、按分类分页浏览 |
 | 搜索 | 关键词、六种排序、结果摘要与分页 |
 | 我的 | 总结、活动、我点赞过、通知、现有私信、账号与邮箱资料、退出 |
-| 话题 | 原生安全富文本、前后 20 楼切片、首楼/尾部/指定楼定位、标题区域双击回顶、楼中楼三条预览及展开收起 |
+| 帖子详情 | 标题、分类/标签和总回复数在作者之前；原生安全富文本、可见楼层进度、前后 20 楼切片、首楼/尾部/指定楼定位、标题区域双击回顶、楼中楼三条预览及展开收起 |
 | 互动 | 按服务器权限回复、编辑、删除、喜欢及其他回应与结果反馈、网站样式简评胶囊、解决方案标记 |
-| 编辑器 | 账号隔离的本机草稿、图库/文档选择器、4 MiB 附件校验、用户发表时才上传 |
+| 编辑器 | 首页右上角发帖；标题、可发分类、标签、正文、待审核回执；账号隔离的本机草稿、图库/文档选择器、4 MiB 附件校验、用户发表时才上传 |
 | 图片 / 附件 | 同 UA / 会话的沙箱图片加载、原图查看、SaveButton 临时授权保存、系统文档保存 |
 | 通知 | 全部 / 回复 / 收到的赞 / 私信；真实服务端 offset，点击已读，定位具体楼层；前台轮询与错误退避 |
 | 登录 | 账号密码、邮件登录链接 token、TOTP / 恢复码、可见网页验证与第三方认证 |
 | 外观 | 跟随系统 / 浅色 / 深色，四档沉浸光感，减少动态、高对比、树形阅读与设置持久化 |
 
-启动时允许浏览服务器公开内容；私有内容与操作仍由服务器鉴权。没有额外添加原项目未提供的新建话题或新私信收件人功能。
+启动时允许浏览服务器公开内容；私有内容与操作仍由服务器鉴权。新建话题仅列出当前账号明确可发的分类，发表前重查权限，使用社区正式发帖接口；私信仍查看现有会话。
 
 ## 鸿蒙 7 原生设计
 
 使用 `HdsNavigation` 组织页面、`HdsTabs` 切换主页面内容。帖子在 `NavDestination` 内绘制固定的作者/话题双行标题：高度为动态顶部避让加56vp，启用单层系统背景模糊，关闭效果或高对比时使用实色。底部主导航由 AdaptiveNavigationBar 呈现。内容面板保持清晰，浮动主导航与阅读工具采用兼容背景模糊、主题染色与触点流光；设置控件和确认弹窗仍使用系统沉浸材质。预览中的背景是独立静态 SVG，通用控件原生材质使用 API 26 的 `uiMaterial.ImmersiveMaterial`，不将底栏兼容绘制称为原生光学渲染。
 
-主导航常驻同一个材质 Stack 和四个稳定 key 的图标节点，由一个弹簧 progress 连续驱动表面宽高、位置、图标位移与文字透明度。HdsTabs 的 barHeight 为0，仅保留内容切换；收放由同一表面完成。交互取自实际手机上的酷安鸿蒙版观察，参考截图只保留在本机，未复制其源码、图标或媒体资源。
+主导航常驻同一个材质 Stack 和五个稳定 key 的图标节点，由一个弹簧 progress 连续驱动表面宽高、位置、图标位移与文字透明度。HdsTabs 的 barHeight 为0，仅保留内容切换；收放由同一表面完成。首页顶部参考手机IT之家，固定品牌/搜索/发帖与文字标签，选中加粗及短下划线；标签不再使用整条玻璃胶囊，消息从底栏进入。内容采用原生Swiper连续跟手分页，拖动中同时显示当前页与邻页；五页分别保留内容、分页及滚动位置，预加载相邻页和点选目标。普通模式点击标签也有过渡，减少动态仍保留手指直接拖动。没有额外手写Pan与列表争抢手势。参考截图只保留在本机，未复制其它App的源码、图标或媒体资源。
 
 握姿适配使用官方 `motion.on('holdingHandChanged')`，只依据系统明确的左手/右手结果调整收起按钮侧别，不根据触点、设备倾斜或模拟数据猜测。前台订阅、后台和销毁取消；未握持、双手和未知保持上次明确侧别，没有明确结果时默认右边。机型不支持返回801时保留布局，模拟器无法验证握姿硬件。实现依据[智感握姿最佳实践](https://developer.huawei.com/consumer/cn/doc/best-practices/bpta-smart-reach)及[获取用户动作指导](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/motion-guidelines)。
 
 | 等级 | 通用控件系统材质 | 底栏兼容表面 |
 | --- | --- | --- |
 | 关闭 | 实色、`Material.empty` | 实色 |
-| 轻柔 | `REGULAR`，无阴影/交互形变/触摸光感 | 模糊16，无触点流光 |
-| 标准 | `REGULAR`、系统阴影、触摸光感 | 模糊24、触点流光 |
-| 丰富 | `THIN`、系统阴影、形变及触摸光感 | 模糊32、触点流光 |
+| 轻柔 | `REGULAR`，无阴影/交互形变/触摸光感 | 模糊8，无投影、无触点流光 |
+| 标准 | `REGULAR`、系统阴影、触摸光感 | 模糊12，无投影、触点流光 |
+| 丰富 | `THIN`、系统阴影、形变及触摸光感 | 模糊16，无投影、触点流光 |
 
 高对比覆盖材质选择。减少动态关闭控件形变及页签切换动画，并让主导航静态展开；标准/丰富等级保留直接随触点移动的高光，不加入自主循环动画，不宣称停止帖子 GIF。底栏在真机与模拟器上均保留可见染色、背景模糊与跟手高光，其他控件仍按原有能力回退。设备本身的 `getGlobalMaterialLevel()` 不可修改，本应用不会改变它。
 
 启动时先获取主窗口并等待 `setWindowLayoutFullScreen(true)` 完成，再加载页面；任一步失败仍按默认布局继续加载，窗口布局失败只记录安全错误码。Index 通过 `@Env(SystemProperties.WINDOW_AVOID_AREA)` 获取以 vp 表示的动态避让信息：顶部取状态栏与挖孔高度的最大值，底部取手势指示条、系统栏与挖孔高度的最大值，不相加，也不把键盘高度计入系统栏避让。
 
-Root / Navigation 负责扩展系统区，子 List / Refresh 保持继承的全高视口，不重复叠加 `ignoreLayoutSafeArea`。四个主页面的内容可滚过系统栏后方，首尾内容与控件保留各自的动态避让。状态区 EdgeBackdrop 使用只读的高斯背景模糊与主题渐隐：轻柔、标准、丰富的 radius 分别为3、5、7，以局部原生 alpha 蒙版一起渐隐到透明；关闭时取消模糊，高对比时使用实色；该层不响应触摸或交互光晕。Root 使用100%高度，普通页面采用 UIContext 的 `RESIZE`，键盘可见时隐藏主导航。半模态编辑器期间暂用 `OFFSET`，由 Sheet 自身的 `RESIZE_ONLY` 压缩输入内容；真正退场后恢复 `RESIZE`。
+Root / Navigation 负责扩展系统区，子 List / Refresh 不重复叠加 `ignoreLayoutSafeArea`。首页固定顶部承担 topInset，列表从0开始；分类仍使用负 topInset 的原生列表起点。消息列表保留独立滚动位置并为浮动底栏预留末端空间。状态区 EdgeBackdrop 使用只读的高斯背景模糊与主题渐隐：轻柔、标准、丰富的 radius 分别为3、5、7，以局部原生 alpha 蒙版一起渐隐到透明；关闭时取消模糊，高对比时使用实色；该层不响应触摸或交互光晕。Root 使用100%高度，普通页面采用 UIContext 的 `RESIZE`，键盘可见时隐藏主导航。半模态编辑器期间暂用 `OFFSET`，由 Sheet 自身的 `RESIZE_ONLY` 压缩输入内容；真正退场后恢复 `RESIZE`。
 
 [华为设计规范](https://developer.huawei.com/consumer/cn/design/) · [HarmonyOS 7 / API 26 升级指导](https://developer.huawei.com/consumer/en/doc/harmonyos-releases/upgrade-adaptation) · [官方沉浸光感方案](https://developer.huawei.com/consumer/cn/doc/guidebook/solution-0000002784570841)
 

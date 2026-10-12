@@ -68,6 +68,17 @@ test('cooked content preserves headings, inline styles, quotes, code, lists, pic
   assert.ok(blocks.some(block => block.runs.some(run => run.href === 'https://linux.do/t/123/9')));
 });
 
+test('code blocks preserve their real language and indentation without leaking the label into following content', () => {
+  const blocks = rich.parsePostContent('<pre><code class="hljs language-yaml">jobs:\n  build:\n    runs-on: macos</code></pre>' +
+    '<p>解释文字</p><pre><code>plain\n  code</code></pre>');
+  assert.equal(blocks[0].kind, 'code');
+  assert.equal(blocks[0].codeLanguage, 'yaml');
+  assert.equal(blocks[0].runs.map(run => run.text).join(''), 'jobs:\n  build:\n    runs-on: macos');
+  assert.equal(blocks[1].kind, 'paragraph');
+  assert.equal(blocks[1].codeLanguage, '');
+  assert.equal(blocks[2].codeLanguage, '');
+});
+
 test('onebox site-icon at 32 pixels and emoji stay inline while the normal thumbnail remains a picture', () => {
   // The site-icon class, empty alt and dimensions match the actual forum post;
   // fixture image addresses never perform network requests in these tests.
@@ -246,6 +257,7 @@ function composerRuntime() {
   composer.draftKey = 'draft_1_100_0_0';
   composer.session = session;
   composer.permitted = true;
+  composer.presentationActive = true;
   composer.topicId = 100;
   composer.draft = 'private draft';
   composer.getUIContext = () => ({ getPromptAction: () => ({ showToast() {} }), showAlertDialog: forbidden });

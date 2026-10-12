@@ -42,8 +42,9 @@ const routeClass = extract(indexSource, '@ObservedV2\nclass ForumRoute', '@Entry
 const methods = [
   extract(indexSource, '  private compose(', '  @Builder\n  replyEditor'),
   extract(indexSource, '  private openLogin(', '  private openNotifications('),
-  extract(indexSource, '  private pushRoute(', '  private openTopic('),
-  extract(indexSource, '  private setNavigationCollapsed(', '  private rootVisibilityChanged(')
+  extract(indexSource, '  private pushRoute(', '  private compose('),
+  extract(indexSource, '  private setNavigationCollapsed(', '  private readNavigationScroll('),
+  extract(indexSource, '  private authenticated(', '  private openBrowser(')
 ].join('\n');
 const { TopicScrollPolicy } = load(source('services/TopicScrollPolicy'));
 const UIKeyboardAvoidMode = { OFFSET: 'offset', RESIZE: 'resize', NONE: 'none' };
@@ -72,12 +73,15 @@ function sheetRuntime(loggedIn = true) {
   Object.assign(index, {
     showComposer: false, composerRoute: undefined,
     composerDismissSignal: 0, composerDismissAllowed: true,
+    createdTopicRoute: undefined, createdTopicOwnerId: 0,
+    pendingNewTopicAfterLogin: false, dataVersion: 0,
     mainPageVisible: false, navigationCollapsed: false,
     navigationScrollPolicy: new TopicScrollPolicy(),
     appearance: { reduceMotion: false, highContrast: false },
     paths: {
       pushPath(route) { pathCalls.push(route); paths.push(route); },
-      pop: forbidden, clear: forbidden
+      pop() { return paths.pop(); }, clear() { paths.splice(0); },
+      size() { return paths.length; }, getAllPathName() { return paths.map(route => route.name); }
     },
     getUIContext: () => ({
       setKeyboardAvoidMode: mode => { keyboardModes.push(mode); },
@@ -188,4 +192,109 @@ test('a signed-out compose action opens the existing login flow without creating
   assert.equal(paths.length, 2);
   assert.strictEqual(paths[0].param, topic);
   assert.deepEqual(keyboardModes, [], 'Signing in first must not enable the composer-specific keyboard policy.');
+});
+
+test('the home new-topic action retains an explicit creation scene without routing a topic id of zero', () => {
+  const { index, pathCalls, keyboardModes } = sheetRuntime();
+  index.openNewTopic();
+  const scene = index.composerRoute;
+  assert.equal(index.showComposer, true);
+  assert.equal(scene.creatingTopic, true);
+  assert.equal(scene.topicId, 0, 'Zero is an unset creation id, never an existing topic route.');
+  assert.equal(scene.returnTopic, undefined);
+  assert.deepEqual(pathCalls, []);
+  assert.deepEqual(keyboardModes, [UIKeyboardAvoidMode.OFFSET]);
+  index.openNewTopic();
+  assert.strictEqual(index.composerRoute, scene, 'Repeated header taps keep the original draft scene.');
+  index.closeComposer();
+  index.composerDisappeared();
+  assert.deepEqual(pathCalls, [], 'Closing an unpublished draft never navigates.');
+});
+
+test('successful creation navigates once, only after the native sheet disappears and its keyboard policy is restored', () => {
+  const { index, pathCalls, keyboardModes } = sheetRuntime();
+  index.openNewTopic();
+  const scene = index.composerRoute;
+  index.composerTopicCreated(321, 1);
+  assert.deepEqual(pathCalls, []);
+  assert.equal(index.dataVersion, 0);
+  index.closeComposer();
+  assert.strictEqual(index.composerRoute, scene);
+  assert.deepEqual(pathCalls, []);
+  index.composerDisappeared();
+  assert.equal(index.composerRoute, undefined);
+  assert.deepEqual(keyboardModes, [UIKeyboardAvoidMode.OFFSET, UIKeyboardAvoidMode.RESIZE]);
+  assert.equal(index.dataVersion, 1);
+  assert.equal(pathCalls.length, 1);
+  assert.equal(pathCalls[0].name, 'topic');
+  assert.equal(pathCalls[0].param.topicId, 321);
+  assert.equal(pathCalls[0].param.postNumber, 1);
+  index.composerDisappeared();
+  index.composerTopicCreated(322, 1);
+  assert.equal(pathCalls.length, 1, 'A duplicate disappearance or late receipt cannot create another route.');
+});
+
+test('queued or invalid creation receipts cannot route, and a receipt from a former account is discarded', () => {
+  const invalid = sheetRuntime();
+  invalid.index.openNewTopic();
+  for (const id of [0, -1, 1.5, NaN, Infinity]) { invalid.index.composerTopicCreated(id, 1); }
+  invalid.index.closeComposer();
+  invalid.index.composerDisappeared();
+  assert.deepEqual(invalid.pathCalls, []);
+  assert.equal(invalid.index.dataVersion, 0);
+
+  const changedAccount = sheetRuntime();
+  changedAccount.index.openNewTopic();
+  changedAccount.index.composerTopicCreated(321, 1);
+  changedAccount.session.user = { id: 8 };
+  changedAccount.index.closeComposer();
+  changedAccount.index.composerDisappeared();
+  assert.deepEqual(changedAccount.pathCalls, []);
+  assert.equal(changedAccount.index.createdTopicRoute, undefined);
+
+  const reply = sheetRuntime();
+  reply.index.compose(100, 8, 0, reply.topic);
+  reply.index.composerTopicCreated(321, 1);
+  reply.index.closeComposer(); reply.index.composerDisappeared();
+  assert.deepEqual(reply.pathCalls, [], 'A reply scene cannot accept a creation receipt.');
+});
+
+test('a guest home action resumes the new-topic editor after its own successful login', () => {
+  const { index, paths, pathCalls, session, keyboardModes } = sheetRuntime(false);
+  index.openNewTopic();
+  assert.equal(index.showComposer, false);
+  assert.equal(index.pendingNewTopicAfterLogin, true);
+  assert.equal(pathCalls.at(-1).name, 'login');
+  assert.deepEqual(keyboardModes, []);
+  session.user = { id: 8 };
+  index.authenticated();
+  assert.equal(index.pendingNewTopicAfterLogin, false);
+  assert.equal(index.showComposer, true);
+  assert.equal(index.composerRoute.creatingTopic, true);
+  assert.equal(paths.length, 0, 'The former guest routes are cleared before opening the signed-in editor.');
+  assert.deepEqual(keyboardModes, [UIKeyboardAvoidMode.OFFSET]);
+});
+
+test('Back, unrelated login and a login callback outside the requested route never revive a cancelled creation intent', () => {
+  const cancelled = sheetRuntime(false);
+  cancelled.index.openNewTopic();
+  cancelled.index.paths.pop();
+  cancelled.index.rootVisibilityChanged(true);
+  assert.equal(cancelled.index.pendingNewTopicAfterLogin, false);
+  cancelled.session.user = { id: 7 };
+  assert.equal(cancelled.index.consumeNewTopicLoginIntent(), false);
+
+  const unrelated = sheetRuntime(false);
+  unrelated.index.openNewTopic();
+  unrelated.index.openLogin();
+  unrelated.session.user = { id: 7 };
+  unrelated.index.authenticated();
+  assert.equal(unrelated.index.showComposer, false);
+
+  const noLoginRoute = sheetRuntime(false);
+  noLoginRoute.index.openNewTopic();
+  noLoginRoute.index.paths.pop();
+  noLoginRoute.session.user = { id: 7 };
+  assert.equal(noLoginRoute.index.consumeNewTopicLoginIntent(), false);
+  assert.equal(noLoginRoute.index.pendingNewTopicAfterLogin, false);
 });

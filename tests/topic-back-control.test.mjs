@@ -83,6 +83,23 @@ function runtime() {
   return { reader, appearance, constructed, materials };
 }
 
+test('collapsed primary button stays centered in its glass circle while expanded and reduced-motion layouts do not shift', () => {
+  const { reader, appearance } = runtime();
+  assert.equal(reader.readerActionContentOffset, 0);
+  reader.toolbarExpanded = false;
+  const primaryCenter = 8 + 52 / 2;
+  assert.equal(reader.readerActionsWidth, 118);
+  assert.equal(primaryCenter + reader.readerActionContentOffset, reader.readerActionsWidth / 2,
+    'The HDS primary center must coincide with the enclosing glass center.');
+  assert.equal(reader.readerActionContentOffset, 25);
+  reader.toolbarExpanded = true;
+  assert.equal(reader.readerActionContentOffset, 0, 'Expanded controls keep their existing positions.');
+  reader.toolbarExpanded = false;
+  appearance.reduceMotion = true;
+  assert.equal(reader.readerToolsVisible, true);
+  assert.equal(reader.readerActionContentOffset, 0, 'Reduced motion exposes the static expanded bar.');
+});
+
 test('the retained back-to-top button becomes enabled after loading without recreating its model', () => {
   const { reader, constructed } = runtime();
   reader.loading = true;
@@ -136,6 +153,9 @@ test('collapse and appearance preserve one material surface and accessibility, w
   appearance.themeMode = 2;
   reader.updateBackTopButton();
   assert.equal(button.accessibilityLevel, 'no-hide-descendants');
+  assert.equal(button.enabled, false, 'The invisible back-to-top button cannot remain interactive.');
+  button.onClick();
+  assert.deepEqual(reader.scroller.edgeCalls, [], 'A stale callback also respects the collapsed state.');
   assert.notStrictEqual(button.buttonModifier, previousModifier);
   assert.equal(button.buttonModifier.material, 'empty-material', 'The parent container owns the only optical surface.');
   assert.equal(materials.length, 0, 'Child controls must not construct an overlapping material or shadow.');
@@ -144,6 +164,7 @@ test('collapse and appearance preserve one material surface and accessibility, w
   appearance.highContrast = true;
   reader.updateBackTopButton();
   assert.equal(button.accessibilityLevel, 'yes', 'Reduced motion exposes the static expanded controls.');
+  assert.equal(button.enabled, true);
   assert.equal(button.buttonModifier.material, 'empty-material');
   assert.strictEqual(reader.backTopButton, button);
 

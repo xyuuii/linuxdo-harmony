@@ -63,23 +63,38 @@ export struct SearchPage {
   }
 
   build() {
-    Column({ space: 10 }) {
-      Column({ space: 10 }) {
-        Text('搜索').fontSize(24).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
-          .width('100%').padding({ top: 12 })
-        Search({ value: this.query, placeholder: '搜索话题、关键词、用户名' })
-          .searchButton('搜索').height(44).backgroundColor($r('app.color.surface'))
+    Column({ space: 0 }) {
+      Column({ space: 12 }) {
+        Text('搜索').fontSize(20).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+          .textAlign(TextAlign.Center).width('100%').height(48)
+        Search({ value: this.query, placeholder: '搜索话题和帖子内容' })
+          .searchButton('搜索').height(46).backgroundColor($r('app.color.page_background'))
+          .fontColor($r('app.color.text_primary')).placeholderColor($r('app.color.text_secondary'))
+          .textFont({ size: 16 }).borderRadius(16)
           .onChange((value: string) => { this.query = value; })
           .onSubmit(() => { void this.search(true); }).id('forum_search')
         Row() {
-          Text('排序').fontSize(14).fontColor($r('app.color.text_secondary'))
+          Text('话题').fontSize(13).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+          Text('包含帖子内容').fontSize(12).fontColor($r('app.color.text_secondary')).margin({ left: 10 })
           Blank()
           Select(searchOrders.map((order): SelectOption => { return { value: order.label }; }))
             .selected(this.orderIndex).value(searchOrders[this.orderIndex].label)
+            .font({ size: 13 }).fontColor($r('app.color.text_primary')).backgroundColor(Color.Transparent)
             .onSelect((index: number) => { this.orderIndex = index; if (this.query.trim()) { void this.search(true); } })
-        }.width('100%')
-      }.width('100%').padding({ top: this.topInset })
-      List({ scroller: this.listScroller, space: 6 }) {
+        }.width('100%').constraintSize({ minHeight: 40 })
+      }.width('100%').padding({ top: this.topInset, left: 18, right: 18, bottom: 8 })
+      Divider().color($r('app.color.divider'))
+      if (this.searched || this.busy) {
+        Row() {
+          Text(this.busy ? '正在搜索…' : `已加载 ${this.items.length} 个相关话题`)
+            .fontSize(12).fontColor($r('app.color.text_secondary'))
+          Blank()
+          if (this.searched) {
+            Text(searchOrders[this.orderIndex].label).fontSize(12).fontColor($r('app.color.text_secondary'))
+          }
+        }.width('100%').padding({ left: 18, right: 18, top: 12, bottom: 8 }).id('search_result_summary')
+      }
+      List({ scroller: this.listScroller, space: 0 }) {
         ForEach(this.items, (item: TopicListItem) => {
           ListItem() {
             TopicRow({ item: item, excerpt: this.excerpts.get(item.topic.id) || '',
@@ -103,12 +118,12 @@ export struct SearchPage {
             }.width('100%').padding({ top: 64, bottom: 24 })
           }
         }
-      }.width('100%').height('100%').layoutWeight(1)
+      }.width('100%').height('100%').layoutWeight(1).padding({ left: 14, right: 14 })
         .scrollBar(BarState.Off).contentEndOffset(92 + this.bottomInset).onWillScroll((offset: number, state: ScrollState, source: ScrollSource): ScrollResult => {
           this.onReadScroll(offset, state, source);
           return { offsetRemain: offset };
         })
-    }.width('100%').height('100%').padding({ left: 14, right: 14 })
+    }.width('100%').height('100%').backgroundColor($r('app.color.surface'))
       .onDisAppear(() => { this.request?.cancel(); })
   }
 }

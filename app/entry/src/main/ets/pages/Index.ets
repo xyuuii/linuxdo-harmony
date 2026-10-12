@@ -12,6 +12,7 @@ import { allowedLoginNavigation, loginOrigin, loginPageTitle } from '../services
 import { TopicScrollPolicy } from '../services/TopicScrollPolicy';
 import { handednessState } from '../services/HandednessState';
 import { TopicFeed } from '../components/TopicFeed';
+import { HomeTopicFeed } from '../components/HomeTopicFeed';
 import { AdaptiveNavigationBar } from '../components/AdaptiveNavigationBar';
 import { EdgeBackdrop } from '../components/EdgeBackdrop';
 import { topWindowInset, bottomWindowInset } from '../services/WindowEdgeInsets';
@@ -28,6 +29,7 @@ import { AboutPage } from './AboutPage';
 
 @ObservedV2
 class ForumRoute {
+  creatingTopic: boolean = false;
   topicId: number = 0;
   @Trace postNumber: number = 1;
   @Trace replyRevision: number = 0;
@@ -69,6 +71,7 @@ struct Index {
   private readonly latestScroller: Scroller = new Scroller();
   private readonly categoriesScroller: Scroller = new Scroller();
   private readonly searchScroller: Scroller = new Scroller();
+  private readonly notificationsScroller: Scroller = new Scroller();
   private readonly profileScroller: Scroller = new Scroller();
   private readonly navigationScrollPolicy: TopicScrollPolicy = new TopicScrollPolicy();
   private webController: webview.WebviewController = new webview.WebviewController();
@@ -76,6 +79,9 @@ struct Index {
   private webAttached: boolean = false;
   private initialized: boolean = false;
   private loginOwnerId: number = 0;
+  private pendingNewTopicAfterLogin: boolean = false;
+  private createdTopicRoute: ForumRoute | undefined = undefined;
+  private createdTopicOwnerId: number = 0;
 
   @Computed
   get topInset(): number { return topWindowInset(this.windowAreas); }
@@ -89,7 +95,8 @@ struct Index {
   private navigationScroller(index: number): Scroller {
     if (index === 1) { return this.categoriesScroller; }
     if (index === 2) { return this.searchScroller; }
-    if (index === 3) { return this.profileScroller; }
+    if (index === 3) { return this.notificationsScroller; }
+    if (index === 4) { return this.profileScroller; }
     return this.latestScroller;
   }
 
@@ -106,17 +113,22 @@ struct Index {
 
   private rootVisibilityChanged(visible: boolean): void {
     this.mainPageVisible = visible;
-    if (visible) { this.resetNavigation(); }
+    if (visible) {
+      // Returning with Back cancels the intent; later unrelated login cannot reopen the editor.
+      this.pendingNewTopicAfterLogin = false;
+      this.resetNavigation();
+    }
   }
 
-  private readNavigationScroll(index: number, offset: number, _state: ScrollState, source: ScrollSource): void {
+  private readNavigationScroll(index: number, offset: number, _state: ScrollState, source: ScrollSource,
+    viewportAtTop?: boolean): void {
     if (index !== this.currentIndex) { return; }
     const blocked: boolean = !this.mainPageVisible || this.showBrowser || this.paths.size() > 0 ||
       this.appearance.reduceMotion || this.appearance.highContrast;
     const userDriven: boolean = source === ScrollSource.DRAG || source === ScrollSource.FLING ||
       source === ScrollSource.OTHER_USER_INPUT;
     const expanded: boolean | undefined = this.navigationScrollPolicy.update(offset, userDriven,
-      this.navigationScroller(index).currentOffset().yOffset + (index < 2 ? this.topInset : 0) <= 1, blocked);
+      viewportAtTop ?? (this.navigationScroller(index).currentOffset().yOffset + (index === 1 ? this.topInset : 0) <= 1), blocked);
     if (expanded !== undefined) { this.setNavigationCollapsed(!expanded); }
   }
 
@@ -161,7 +173,22 @@ struct Index {
     const route: ForumRoute = new ForumRoute();
     route.topicId = topicId; route.replyTo = replyTo; route.postId = postId;
     route.returnTopic = returnTopic;
+    this.presentComposer(route);
+  }
+
+  private openNewTopic(): void {
     if (this.composerRoute !== undefined) { return; }
+    if (forumSession.user === undefined) { this.openLogin(true); return; }
+    const route: ForumRoute = new ForumRoute();
+    route.creatingTopic = true;
+    this.resetNavigation();
+    this.presentComposer(route);
+  }
+
+  private presentComposer(route: ForumRoute): void {
+    if (this.composerRoute !== undefined) { return; }
+    this.createdTopicRoute = undefined;
+    this.createdTopicOwnerId = 0;
     this.composerRoute = route;
     this.setComposerKeyboardMode(true);
     this.composerDismissSignal = 0;
@@ -189,11 +216,21 @@ struct Index {
   private closeComposer(): void { this.showComposer = false; }
 
   private composerDisappeared(): void {
+    const created: ForumRoute | undefined = this.createdTopicRoute;
+    const createdForCurrentUser: boolean = this.createdTopicOwnerId > 0 &&
+      this.createdTopicOwnerId === (forumSession.user?.id || 0);
+    this.createdTopicRoute = undefined;
+    this.createdTopicOwnerId = 0;
     this.showComposer = false;
     this.composerRoute = undefined;
     this.setComposerKeyboardMode(false);
     this.composerDismissAllowed = true;
     this.composerDismissSignal = 0;
+    // Navigate only after the native sheet and its keyboard have fully left the screen.
+    if (created !== undefined && createdForCurrentUser) {
+      this.dataVersion++;
+      this.openTopic(created.topicId, created.postNumber);
+    }
   }
 
   private composerSubmitted(number: number): void {
@@ -201,28 +238,43 @@ struct Index {
     if (topic !== undefined) { topic.postNumber = number; topic.replyRevision++; }
   }
 
+  private composerTopicCreated(topicId: number, postNumber: number): void {
+    if (!this.showComposer || !this.composerRoute?.creatingTopic || forumSession.user === undefined ||
+      !Number.isSafeInteger(topicId) || topicId <= 0) { return; }
+    const created: ForumRoute = new ForumRoute();
+    created.topicId = topicId;
+    created.postNumber = Number.isSafeInteger(postNumber) && postNumber > 0 ? postNumber : 1;
+    this.createdTopicRoute = created;
+    this.createdTopicOwnerId = forumSession.user.id;
+  }
+
   @Builder
   replyEditor() {
     if (this.composerRoute !== undefined) {
       ComposerPage({ presentedAsSheet: true, dismissSignal: this.composerDismissSignal,
+        creatingTopic: this.composerRoute.creatingTopic,
         bottomInset: this.keyboardVisible ? 0 : this.bottomInset,
         topicId: this.composerRoute.topicId, replyTo: this.composerRoute.replyTo, postId: this.composerRoute.postId,
         appearance: this.appearance,
         onDismissAllowedChange: (allowed: boolean): void => { this.composerDismissAllowed = allowed; },
         onSubmitted: (number: number): void => { this.composerSubmitted(number); },
+        onTopicCreated: (topicId: number, postNumber: number): void => { this.composerTopicCreated(topicId, postNumber); },
         onDone: (): void => { this.closeComposer(); } })
     }
   }
 
-  private openLogin(): void {
+  private openLogin(resumeNewTopic: boolean = false): void {
     this.resetNavigation();
+    this.pendingNewTopicAfterLogin = resumeNewTopic;
     this.loginOwnerId = forumSession.user?.id || 0;
     this.pushRoute('login', new ForumRoute());
   }
   private openNotifications(): void {
-    if (forumSession.user === undefined) { this.openLogin(); return; }
     this.resetNavigation();
-    this.pushRoute('notifications', new ForumRoute());
+    if (this.paths.size() > 0) { this.paths.clear(); }
+    this.mainPageVisible = true;
+    this.currentIndex = 3;
+    this.controller.changeIndex(3);
   }
   private openCategory(category: Category): void {
     this.resetNavigation();
@@ -238,9 +290,18 @@ struct Index {
   }
 
   private authenticated(): void {
+    const resumeNewTopic: boolean = this.consumeNewTopicLoginIntent();
     if (this.loginOwnerId !== (forumSession.user?.id || 0)) { this.paths.clear(); }
     else { this.paths.pop(); }
     this.dataVersion++;
+    if (resumeNewTopic) { this.openNewTopic(); }
+  }
+
+  private consumeNewTopicLoginIntent(): boolean {
+    const resume: boolean = this.pendingNewTopicAfterLogin && forumSession.user !== undefined &&
+      this.paths.getAllPathName().slice(-1)[0] === 'login';
+    this.pendingNewTopicAfterLogin = false;
+    return resume;
   }
 
   private openBrowser(): void {
@@ -269,8 +330,10 @@ struct Index {
       forumSession.startPolling();
       this.dataVersion++;
       const currentUserId: number = forumSession.user?.id || 0;
+      const resumeNewTopic: boolean = this.consumeNewTopicLoginIntent();
       if (previousUserId !== currentUserId) { this.paths.clear(); }
       else if (this.paths.getAllPathName().slice(-1)[0] === 'login' && currentUserId > 0) { this.paths.pop(); }
+      if (resumeNewTopic) { this.openNewTopic(); }
     } catch { this.browserError = '尚未确认网页会话，请完成页面中的验证后再试。'; }
     finally { this.browserBusy = false; }
   }
@@ -366,8 +429,6 @@ struct Index {
           reloadSignal: this.dataVersion + forumSession.revision,
           onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); }, onVerify: (): void => { this.openBrowser(); } })
       }.title((param as ForumRoute).categoryName).padding({ top: this.topInset }).backgroundColor($r('app.color.page_background'))
-    } else if (name === 'notifications') {
-      NotificationsPage({ topInset: this.topInset, bottomInset: this.bottomInset, onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); }, onLogin: (): void => { this.openLogin(); } })
     } else if (name === 'profile') {
       ProfileSectionPage({ topInset: this.topInset, bottomInset: this.bottomInset, section: (param as ForumRoute).section,
         onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); }, onLogin: (): void => { this.openLogin(); } })
@@ -385,18 +446,22 @@ struct Index {
       HdsNavigation(this.paths) {
         HdsTabs({ controller: this.controller, index: this.currentIndex }) {
           TabContent() {
-            TopicFeed({ appearance: this.appearance, reloadSignal: this.dataVersion + forumSession.revision,
+            HomeTopicFeed({ appearance: this.appearance, reloadSignal: this.dataVersion + forumSession.revision,
               refreshTopSignal: this.latestRefreshSignal,
-              topInset: this.topInset, bottomInset: this.bottomInset, immersiveTop: true,
-              listScroller: this.latestScroller,
-              onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
-                this.readNavigationScroll(0, offset, state, source);
+              topInset: this.topInset, bottomInset: this.bottomInset,
+              onReadScroll: (offset: number, state: ScrollState, source: ScrollSource, atTop: boolean): void => {
+                this.readNavigationScroll(0, offset, state, source, atTop);
               },
-              active: this.currentIndex === 0 && !this.showBrowser && this.paths.size() === 0,
+              active: this.currentIndex === 0 && this.mainPageVisible && !this.showBrowser && this.paths.size() === 0,
               onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); },
-              onVerify: (): void => { this.openBrowser(); }, onNotifications: (): void => { this.openNotifications(); } })
+              onVerify: (): void => { this.openBrowser(); }, onNewTopic: (): void => { this.openNewTopic(); },
+              onCategories: (): void => {
+                this.resetNavigation(); this.currentIndex = 1; this.controller.changeIndex(1);
+              }, onSearch: (): void => {
+                this.resetNavigation(); this.currentIndex = 2; this.controller.changeIndex(2);
+              } })
           }.height('100%')
-            .tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.house')) }, '最新'))
+            .tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.message')) }, '话题'))
           TabContent() {
             CategoriesPage({ reloadSignal: this.dataVersion + forumSession.revision,
               topInset: this.topInset, bottomInset: this.bottomInset,
@@ -418,10 +483,22 @@ struct Index {
           }.height('100%')
             .tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.magnifyingglass')) }, '搜索'))
           TabContent() {
+            NotificationsPage({ embedded: true, appearance: this.appearance, session: forumSession,
+              topInset: this.topInset, bottomInset: this.bottomInset,
+              active: this.currentIndex === 3 && this.mainPageVisible && !this.showBrowser && this.paths.size() === 0,
+              listScroller: this.notificationsScroller,
+              onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
+                this.readNavigationScroll(3, offset, state, source);
+              },
+              onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); },
+              onLogin: (): void => { this.openLogin(); } })
+          }.height('100%')
+            .tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.bell')) }, '消息'))
+          TabContent() {
             ProfilePage({ listScroller: this.profileScroller,
               topInset: this.topInset, bottomInset: this.bottomInset,
               onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
-                this.readNavigationScroll(3, offset, state, source);
+                this.readNavigationScroll(4, offset, state, source);
               },
               onLogin: (): void => { this.openLogin(); }, onOpenSection: (section: ProfileSection): void => { this.openProfile(section); },
               onSettings: (): void => { this.resetNavigation(); this.pushRoute('settings', new ForumRoute()); },
@@ -430,7 +507,7 @@ struct Index {
           }.height('100%')
             .tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.person')) }, '我的'))
         }.width('100%').height('100%')
-          .barPosition(BarPosition.End).barOverlap(true).vertical(false).barHeight(0)
+          .barPosition(BarPosition.End).barOverlap(true).vertical(false).barHeight(0).scrollable(false)
           .barBackgroundBlurStyle(BlurStyle.NONE).barBackgroundColor(Color.Transparent)
           .animationDuration(this.appearance.reduceMotion ? 0 : 240).onChange((index: number) => {
             this.currentIndex = index;
@@ -442,9 +519,11 @@ struct Index {
         .navDestination(this.destination).backgroundColor($r('app.color.page_background'))
         .onNavBarStateChange((visible: boolean): void => { this.rootVisibilityChanged(visible); })
         .bindSheet(this.showComposer, this.replyEditor, {
-          detents: ['50%', '85%'], detentSelection: this.keyboardVisible ? '85%' : '50%',
-          preferType: SheetType.BOTTOM, dragBar: true, showClose: false,
-          enableOutsideInteractive: false, backgroundColor: $r('app.color.surface'),
+          detents: this.composerRoute?.creatingTopic ? [SheetSize.LARGE] : ['50%', '85%'],
+          detentSelection: this.composerRoute?.creatingTopic ? SheetSize.LARGE : this.keyboardVisible ? '85%' : '50%',
+          preferType: SheetType.BOTTOM, dragBar: !this.composerRoute?.creatingTopic, showClose: false,
+          enableOutsideInteractive: false,
+          backgroundColor: this.composerRoute?.creatingTopic ? $r('app.color.surface') : $r('app.color.page_background'),
           blurStyle: this.appearance.effectLevel === 0 || this.appearance.highContrast ? BlurStyle.NONE : BlurStyle.COMPONENT_THIN,
           keyboardAvoidMode: SheetKeyboardAvoidMode.RESIZE_ONLY,
           onWillDismiss: (_action: DismissSheetAction): void => { this.requestComposerDismiss(); },
@@ -458,6 +537,7 @@ struct Index {
         .hitTestBehavior(HitTestMode.None).accessibilityLevel('no-hide-descendants').zIndex(1)
 
       AdaptiveNavigationBar({ currentIndex: this.currentIndex, collapsed: this.navigationCollapsed,
+        unreadCount: forumSession.unread,
         sideLeft: handednessState.sideLeft,
         appearance: this.appearance,
         bottomInset: this.bottomInset,

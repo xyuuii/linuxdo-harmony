@@ -291,6 +291,37 @@ test('Discourse system author with signed ID maps into the feed alongside ordina
   assert.equal(rt.wire.userFromWire({ id: -1, username: 'system' }).id, -1);
 });
 
+test('home filters use their own Discourse routes and keep the weekly top period across pagination', async () => {
+  const rt = runtime();
+  const { api, requests } = browserApi(rt, async request => json({
+    topic_list: { topics: [{ id: 42, title: request.path }], more_topics_url: '/next' }
+  }));
+  for (const option of rt.models.topicFeedFilters) {
+    const page = await api.fetchTopicFeed(option.value, 2);
+    const expected = `/${option.value}.json?page=2${option.value === 'top' ? '&period=weekly' : ''}`;
+    assert.equal(requests.at(-1).path, expected);
+    assert.equal(page.items[0].topic.title, expected); assert.equal(page.hasMore, true);
+  }
+  await api.fetchTopicFeed(rt.models.TopicFeedFilter.Top, 3);
+  assert.equal(requests.at(-1).path, '/top.json?page=3&period=weekly');
+  const before = requests.length;
+  await assert.rejects(() => api.fetchTopicFeed('../admin'), error => error.kind === rt.api.ForumErrorKind.Rejected);
+  await assert.rejects(() => api.fetchTopicFeed('latest', -1));
+  assert.equal(requests.length, before);
+});
+
+test('unsupported and login-required feeds surface the server outcome instead of returning latest topics', async () => {
+  const rt = runtime();
+  const unavailable = browserApi(rt, async () => ({ status: 404, body: '{}', headers: {} }));
+  await assert.rejects(() => unavailable.api.fetchTopicFeed('hot'),
+    error => error.kind === rt.api.ForumErrorKind.Unsupported && error.message.includes('暂未开放'));
+  assert.equal(unavailable.requests.length, 1); assert.equal(unavailable.requests[0].path, '/hot.json?page=0');
+  const anonymous = browserApi(rt, async () => ({ status: 401, body: '{}', headers: {} }));
+  await assert.rejects(() => anonymous.api.fetchTopicFeed('unread'),
+    error => error.kind === rt.api.ForumErrorKind.AuthenticationRequired);
+  assert.equal(anonymous.requests.length, 1); assert.equal(anonymous.requests[0].path, '/unread.json?page=0');
+});
+
 test('signed user IDs still reject malformed numbers and content IDs remain strictly positive', () => {
   const { wire } = runtime();
   for (const id of [undefined, null, '1', 0, NaN, Infinity, -Infinity, 1.5, -1.5,
@@ -408,6 +439,38 @@ test('nested categories retain parent relations and flatten without duplicates',
   assert.equal(parent.color, '0088CC');
 });
 
+test('topic lists and search show all replies rather than explicit reply relationships', () => {
+  const { wire } = runtime();
+  assert.equal(wire.topicFromWire({ id: 3, title: 'Thread', posts_count: 1640, reply_count: 166 }).replyCount, 1639);
+  assert.equal(wire.topicFromWire({ id: 3, title: 'Thread', posts_count: 1, reply_count: 0 }).replyCount, 0);
+  assert.equal(wire.topicFromWire({ id: 3, title: 'Thread', posts_count: 0, reply_count: 4 }).replyCount, 0);
+  assert.equal(wire.topicFromWire({ id: 3, title: 'Thread', reply_count: 166 }).replyCount, 166,
+    'Older list payloads without posts_count keep their only available count.');
+  assert.equal(wire.topicFromWire({ id: 3, title: 'Thread' }).replyCount, 0);
+});
+
+test('topic detail keeps real tags, reply count and highest floor with compatible missing metadata', () => {
+  const { wire } = runtime();
+  const detail = wire.detailFromWire({
+    id: 3, title: 'Thread', category_id: 8, tags: ['软件开发', { name: '开源' }, '软件开发', null, {}, ''],
+    posts_count: 40, reply_count: 4, highest_post_number: 43,
+    post_stream: { stream: [10, 11], posts: [{ id: 10, post_number: 1 }, { id: 11, post_number: 42 }] }
+  });
+  assert.deepEqual(detail.tags, ['软件开发', '开源']);
+  assert.equal(detail.categoryId, 8);
+  assert.equal(detail.replyCount, 39, 'All replies use posts_count minus the original, not explicit reply relationships.');
+  assert.equal(detail.highestPostNumber, 43, 'Deleted floors must not make the denominator smaller than a real floor.');
+  const fallback = wire.detailFromWire({ id: 3, title: 'Thread', reply_count: 166, post_stream: {
+    stream: [10, 11], posts: [{ id: 11, post_number: 42 }]
+  } });
+  assert.deepEqual(fallback.tags, []);
+  assert.equal(fallback.replyCount, 1);
+  assert.equal(fallback.highestPostNumber, 42);
+  const empty = wire.detailFromWire({ id: 3, title: 'Thread', post_stream: {} });
+  assert.equal(empty.replyCount, 0);
+  assert.equal(empty.highestPostNumber, 0);
+});
+
 test('missing or malformed permissions fail closed; closed topics cannot reply', () => {
   const { wire } = runtime();
   const missing = wire.detailFromWire({ id: 3, title: 'Thread', post_stream: {} });
@@ -463,8 +526,96 @@ test('notification filtering advances server offset by limit despite removed or 
   assert.deepEqual(page.notifications.map(notice => notice.type), [2]);
   assert.equal(page.nextOffset, 120);
   assert.equal(page.hasMore, false);
-  assert.ok(requests[0].path.includes('filter_by_types=mentioned%2Creplied'));
+  assert.equal(requests[0].path.includes('filter_by_types'), false, 'history does not support server type filtering');
   assert.ok(requests[1].path.includes('offset=60'));
+});
+
+test('notification categories retain read and unread matches and return the first useful page', async () => {
+  const rt = runtime();
+  const notices = [1, 2, 3, 5, 6, 7, 15, 16, 19, 25, 33, 43, 12].map((type, index) => ({
+    id: index + 1, notification_type: type, read: index % 2 === 0,
+    topic_id: 42, post_number: index + 1, data: { topic_title: 'Fixture notification' }
+  }));
+  const { api, requests } = browserApi(rt, async () => json({
+    notifications: notices, total_rows_notifications: 600
+  }));
+  for (const [filter, types] of [
+    [rt.models.NotificationFilter.All, notices.map(notice => notice.notification_type)],
+    [rt.models.NotificationFilter.Replies, [1, 2, 3, 15, 33, 43]],
+    [rt.models.NotificationFilter.Likes, [5, 19, 25]],
+    [rt.models.NotificationFilter.Messages, [6, 7, 16]]
+  ]) {
+    const before = requests.length;
+    const page = await api.fetchNotifications(0, filter);
+    assert.deepEqual(page.notifications.map(notice => notice.type), types);
+    assert.equal(page.nextOffset, 60);
+    assert.equal(page.hasMore, true);
+    assert.equal(requests.length - before, 1, 'one useful page is enough; do not delay for 20 matches');
+    assert.ok(page.notifications.some(notice => notice.read));
+    assert.ok(page.notifications.some(notice => !notice.read));
+  }
+});
+
+test('sparse notification categories resume past the initial five pages without declaring an empty history', async () => {
+  const rt = runtime();
+  const { api, requests } = browserApi(rt, async request => {
+    const query = new URL('https://linux.do' + request.path).searchParams;
+    const offset = Number(query.get('offset'));
+    return json({ total_rows_notifications: 361, notifications: offset < 300 ?
+      [{ id: offset + 1, notification_type: 5, read: true }] :
+      offset === 300 ? [{ id: 301, notification_type: 6, read: false }] : [] });
+  });
+  const scan = await api.fetchNotifications(0, rt.models.NotificationFilter.Messages);
+  assert.deepEqual(scan.notifications, []);
+  assert.equal(scan.hasMore, true, 'not enough history has been searched to show an empty category');
+  assert.equal(scan.nextOffset, 300);
+  assert.equal(requests.length, 5, 'sparse history cannot trigger an unbounded request burst');
+  const older = await api.fetchNotifications(scan.nextOffset, rt.models.NotificationFilter.Messages);
+  assert.deepEqual(older.notifications.map(notice => notice.id), [301]);
+  assert.equal(older.nextOffset, 360);
+  assert.equal(older.hasMore, true);
+  const last = await api.fetchNotifications(older.nextOffset, rt.models.NotificationFilter.Messages);
+  assert.deepEqual(last.notifications, []);
+  assert.equal(last.hasMore, false);
+  assert.equal(requests.length, 7);
+});
+
+test('notification scan crosses inaccessible empty rows but rejects repeated nonmatching pages', async () => {
+  const rt = runtime();
+  const { api } = browserApi(rt, async request => {
+    const offset = Number(new URL('https://linux.do' + request.path).searchParams.get('offset'));
+    return json({ total_rows_notifications: 120, notifications: offset === 0 ? [] :
+      [{ id: 61, notification_type: 7, read: false }] });
+  });
+  const page = await api.fetchNotifications(0, rt.models.NotificationFilter.Messages);
+  assert.deepEqual(page.notifications.map(notice => notice.id), [61]);
+  assert.equal(page.hasMore, false);
+  const repeated = browserApi(rt, async () => json({ total_rows_notifications: 1000,
+    notifications: [{ id: 1, notification_type: 5, read: true }] }));
+  await assert.rejects(() => repeated.api.fetchNotifications(0, rt.models.NotificationFilter.Messages),
+    error => error.kind === rt.api.ForumErrorKind.InvalidResponse);
+  assert.equal(repeated.requests.length, 2);
+});
+
+test('cancelled or previous-account notification scans cannot continue or return stale content', async () => {
+  for (const resetAccount of [false, true]) {
+    const rt = runtime();
+    const cancellation = new rt.api.RequestCancellation();
+    let release;
+    let started;
+    const pending = new Promise(resolve => { started = resolve; });
+    const { api, requests } = browserApi(rt, async () => {
+      started();
+      return new Promise(resolve => { release = resolve; });
+    });
+    const outcome = api.fetchNotifications(0, rt.models.NotificationFilter.Messages, cancellation)
+      .then(value => ({ value }), error => ({ error }));
+    await pending;
+    if (resetAccount) { api.resetSessionContext(); } else { cancellation.cancel(); }
+    release(json({ total_rows_notifications: 600, notifications: [{ id: 1, notification_type: 5 }] }));
+    assert.equal((await outcome).error.kind, rt.api.ForumErrorKind.Cancelled);
+    assert.equal(requests.length, 1);
+  }
 });
 
 test('bell unread count excludes likes while category unread counts include them', async () => {
@@ -747,4 +898,158 @@ test('media rejects HTTP, redirect, challenge HTML and excessive responses befor
     assert.equal(rt.files.size, 0);
     assert.equal(rt.destroyCount, 1);
   }
+});
+
+test('new topic categories require explicit create permission and refresh account-scoped permissions', async () => {
+  const rt = runtime();
+  let loadCount = 0;
+  const { api, requests } = browserApi(rt, async request => {
+    assert.equal(request.path, '/categories.json?include_subcategories=true');
+    loadCount++;
+    return json({ category_list: { categories: [
+      { id: 1, name: 'Writable', permission: loadCount === 1 ? 1 : 3,
+        minimum_required_tags: 2, topic_template: 'Describe the question', topic_title_placeholder: 'Question title',
+        subcategory_list: [{ id: 7, name: 'Writable child', permission: 1, parent_category_id: 1 }] },
+      { id: 2, name: 'Reply only', permission: 2 }, { id: 3, name: 'Read only', permission: 3 },
+      { id: 4, name: 'Missing permission' }, { id: 5, name: 'Invalid permission', permission: true },
+      { id: 6, name: 'String permission', permission: '1' }
+    ] } });
+  });
+  const categories = await api.fetchCreateTopicCategories();
+  assert.deepEqual(categories.map(category => category.id), [1, 7]);
+  assert.equal(categories[0].minimumRequiredTags, 2);
+  assert.equal(categories[0].topicTemplate, 'Describe the question');
+  assert.equal(categories[0].topicTitlePlaceholder, 'Question title');
+  assert.deepEqual((await api.fetchCreateTopicCategories()).map(category => category.id), [7]);
+  assert.equal(requests.length, 2, 'composer must not reuse stale create permissions');
+  assert.equal(rt.nativeCalls.length, 0);
+});
+
+test('new topic sends title body category and named tags with CSRF once, returning only a real first post', async () => {
+  const rt = runtime();
+  const { api, requests } = browserApi(rt, async request => {
+    if (request.path === '/session/csrf.json') { return json({ csrf: 'new-topic-fixture-csrf' }); }
+    return json({ success: true, action: 'create_post', post: { id: 300, topic_id: 90, post_number: 1 } });
+  });
+  assert.deepEqual(await api.createTopic(' A topic ', ' Body with **formatting** ', 7, [' tag ', '标签', 'tag', '']),
+    { queued: false, topicId: 90, postNumber: 1, pendingCount: 0 });
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].path, '/posts.json');
+  assert.equal(requests[1].method, 'POST');
+  assert.equal(requests[1].csrf, 'new-topic-fixture-csrf');
+  assert.deepEqual(JSON.parse(requests[1].body), { title: 'A topic', raw: 'Body with **formatting**', category: 7,
+    tags: [{ name: 'tag' }, { name: '标签' }], nested_post: true });
+  assert.equal(rt.nativeCalls.length, 0);
+});
+
+test('new topic distinguishes confirmed queue receipts from published and legacy flat receipts', async () => {
+  const rt = runtime();
+  for (const receipt of [
+    { success: true, action: 'enqueued', pending_count: 3 },
+    { id: 301, topic_id: 91, post_number: 1 }
+  ]) {
+    const { api, requests } = browserApi(rt, async request => request.path === '/session/csrf.json' ?
+      json({ csrf: 'fixture-csrf' }) : json(receipt));
+    const result = await api.createTopic('A topic', 'A full body', 7);
+    assert.deepEqual(result, receipt.action === 'enqueued' ?
+      { queued: true, topicId: 0, postNumber: 0, pendingCount: 3 } :
+      { queued: false, topicId: 91, postNumber: 1, pendingCount: 0 });
+    assert.equal(requests.filter(request => request.method === 'POST').length, 1);
+  }
+});
+
+test('new topic fails unknown or malformed receipts without inventing a topic or retrying the mutation', async () => {
+  const rt = runtime();
+  const receipts = [json({}), json({ success: true }), json({ action: 'enqueued' }),
+    json({ action: 'create_post', success: true, post: { id: 300, topic_id: 90 } }),
+    json({ action: 'create_post', success: true, post: { id: 300, topic_id: 90, post_number: 2 } }),
+    json({ action: 'future_action', success: true, post: { id: 300, topic_id: 90, post_number: 1 } }),
+    json({ post: { id: 300, topic_id: 90, post_number: 1 } }),
+    json(null), json([]), { status: 200, body: 'not JSON', headers: {} }, json({}, 503)];
+  for (const receipt of receipts) {
+    const { api, requests } = browserApi(rt, async request => request.path === '/session/csrf.json' ?
+      json({ csrf: 'fixture-csrf' }) : receipt);
+    await assert.rejects(() => api.createTopic('A topic', 'A full body', 7), error =>
+      error.kind === rt.api.ForumErrorKind.UnknownResult);
+    assert.equal(requests.filter(request => request.method === 'POST').length, 1);
+  }
+});
+
+test('new topic preserves validation details and authentication or verification failures without reposting', async () => {
+  const rt = runtime();
+  const cases = [
+    [json({ errors: ['<b>标题</b>太短', '至少需要 2 个标签'] }, 422), rt.api.ForumErrorKind.Rejected, '标题 太短；至少需要 2 个标签'],
+    [json({ success: false, errors: ['标签不可用'] }), rt.api.ForumErrorKind.Rejected, '标签不可用'],
+    [json({}, 401), rt.api.ForumErrorKind.AuthenticationRequired],
+    [json({}, 403), rt.api.ForumErrorKind.Forbidden],
+    [json({}, 503, { 'cf-mitigated': 'challenge' }), rt.api.ForumErrorKind.VerificationRequired]
+  ];
+  for (const [receipt, kind, message] of cases) {
+    const { api, requests } = browserApi(rt, async request => request.path === '/session/csrf.json' ?
+      json({ csrf: 'fixture-csrf' }) : receipt);
+    await assert.rejects(() => api.createTopic('A topic', 'A full body', 7), error =>
+      error.kind === kind && (!message || error.message === message));
+    assert.equal(requests.filter(request => request.method === 'POST').length, 1);
+  }
+});
+
+test('new topic rejects missing input, invalid CSRF and pre-dispatch cancellation without writing', async () => {
+  const rt = runtime();
+  const { api, requests } = browserApi(rt, async () => json({ csrf: '' }));
+  for (const [title, raw, category] of [[' ', 'Body', 7], ['Title', ' ', 7], ['Title', 'Body', 0]]) {
+    await assert.rejects(() => api.createTopic(title, raw, category), error => error.kind === rt.api.ForumErrorKind.Rejected);
+  }
+  assert.equal(requests.length, 0);
+  const cancellation = new rt.api.RequestCancellation(); cancellation.cancel();
+  await assert.rejects(() => api.createTopic('Title', 'Body', 7, [], cancellation), error =>
+    error.kind === rt.api.ForumErrorKind.Cancelled);
+  assert.equal(requests.length, 0);
+  await assert.rejects(() => api.createTopic('Title', 'Body', 7), error => error.kind === rt.api.ForumErrorKind.InvalidResponse);
+  assert.equal(requests.filter(request => request.method === 'POST').length, 0);
+});
+
+test('new topic account reset after CSRF prevents submitting another account draft', async () => {
+  const rt = runtime();
+  const { api, requests } = browserApi(rt, async () => json({}));
+  let releaseCsrf;
+  api.fetchCsrf = () => new Promise(resolve => { releaseCsrf = resolve; });
+  const outcome = api.createTopic('Private old title', 'Private old draft', 7).then(value => ({ value }), error => ({ error }));
+  api.resetSessionContext();
+  releaseCsrf('old-account-csrf');
+  assert.equal((await outcome).error.kind, rt.api.ForumErrorKind.Cancelled);
+  assert.equal(requests.length, 0);
+});
+
+test('new topic late receipts and category permissions cannot cross cancellation or account changes', async () => {
+  const rt = runtime();
+  for (const mode of ['cancel', 'account']) {
+    let releaseResponse;
+    let markDispatched;
+    const dispatched = new Promise(resolve => { markDispatched = resolve; });
+    const { api, requests } = browserApi(rt, async request => {
+      if (request.path === '/session/csrf.json') { return json({ csrf: 'fixture-csrf' }); }
+      markDispatched();
+      return new Promise(resolve => { releaseResponse = resolve; });
+    });
+    const cancellation = new rt.api.RequestCancellation();
+    const outcome = api.createTopic('Title', 'Body', 7, [], cancellation).then(value => ({ value }), error => ({ error }));
+    await dispatched;
+    if (mode === 'cancel') { cancellation.cancel(); } else { api.resetSessionContext(); }
+    releaseResponse(json({ success: true, action: 'create_post', post: { id: 300, topic_id: 90, post_number: 1 } }));
+    assert.equal((await outcome).error.kind, rt.api.ForumErrorKind.Cancelled);
+    assert.equal(requests.filter(request => request.method === 'POST').length, 1);
+  }
+  let releaseCategories;
+  let markCategoriesDispatched;
+  const categoriesDispatched = new Promise(resolve => { markCategoriesDispatched = resolve; });
+  const { api } = browserApi(rt, async () => {
+    markCategoriesDispatched();
+    return new Promise(resolve => { releaseCategories = resolve; });
+  });
+  const categories = api.fetchCreateTopicCategories().then(value => ({ value }), error => ({ error }));
+  await categoriesDispatched;
+  api.resetSessionContext();
+  releaseCategories(json({ category_list: { categories: [{ id: 7, name: 'Old private category', permission: 1 }] } }));
+  assert.equal((await categories).error.kind, rt.api.ForumErrorKind.Cancelled);
+  assert.deepEqual(api.cachedCategories(), []);
 });

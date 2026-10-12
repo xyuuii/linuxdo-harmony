@@ -31,15 +31,13 @@ export struct ReaderGlassSurface {
     Stack() {
       Row().width('100%').height(this.radiusVp * 2).borderRadius(this.radiusVp)
         .backgroundEffect({
-          radius: this.appearance.effectLevel === 1 ? 16 : this.appearance.effectLevel === 2 ? 24 : 32,
+          radius: this.appearance.effectLevel === 1 ? 8 : this.appearance.effectLevel === 2 ? 12 : 16,
           saturation: 1.05, color: Color.Transparent })
       // Tint is a normal paint layer, so unavailable filters cannot erase the visible surface.
       Row().width('100%').height(this.radiusVp * 2).borderRadius(this.radiusVp)
         .backgroundColor($r('app.color.reading_glass_tint'))
     }.width('100%').height(this.radiusVp * 2).borderRadius(this.radiusVp)
       .border({ width: 0.6, color: $r('app.color.reading_glass_rim') })
-      .shadow(this.appearance.effectLevel > 1 ? {
-        radius: 6, offsetY: 2, fill: false, color: $r('app.color.reading_glass_shadow') } : undefined)
       .hitTestBehavior(HitTestMode.None).accessibilityLevel('no-hide-descendants')
   }
 

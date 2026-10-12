@@ -38,7 +38,12 @@ export interface Category {
   topicCount: number;
   parentCategoryId: number;
   subcategoryList: Category[];
+  canCreateTopic?: boolean;
+  minimumRequiredTags?: number;
+  topicTemplate?: string;
+  topicTitlePlaceholder?: string;
 }
+export interface TopicCreationResult { queued: boolean; topicId: number; postNumber: number; pendingCount: number; }
 export interface TopicListItem {
   topic: Topic;
   authorUsername: string;
@@ -46,6 +51,13 @@ export interface TopicListItem {
   category?: Category;
 }
 export interface TopicPage { items: TopicListItem[]; hasMore: boolean; }
+export enum TopicFeedFilter { Latest = 'latest', New = 'new', Unread = 'unread', Hot = 'hot', Top = 'top' }
+export interface TopicFeedFilterOption { value: TopicFeedFilter; label: string; }
+export const topicFeedFilters: TopicFeedFilterOption[] = [
+  { value: TopicFeedFilter.Latest, label: '最新' }, { value: TopicFeedFilter.New, label: '新' },
+  { value: TopicFeedFilter.Unread, label: '未读' }, { value: TopicFeedFilter.Hot, label: '热门' },
+  { value: TopicFeedFilter.Top, label: '排行' }
+];
 export interface Reaction { id: string; count: number; canUndo: boolean; }
 export interface Boost { id: number; cooked: string; user?: DiscourseUser; canDelete: boolean; }
 export interface Post {
@@ -78,6 +90,9 @@ export interface TopicDetail {
   id: number;
   title: string;
   categoryId: number;
+  tags?: string[];
+  replyCount?: number;
+  highestPostNumber?: number;
   postStream: PostStream;
   validReactions: string[];
   closed: boolean;
@@ -120,6 +135,8 @@ export interface ForumNotification {
   topicId: number;
   postNumber: number;
 }
+// An empty bounded scan can still have older rows. nextOffset is the server
+// history cursor, not a count of notifications matching the selected filter.
 export interface NotificationPage { notifications: ForumNotification[]; hasMore: boolean; nextOffset: number; }
 export interface UnreadSummary {
   count: number;

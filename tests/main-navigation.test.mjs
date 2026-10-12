@@ -33,10 +33,14 @@ const start = indexSource.indexOf('  private navigationScroller(');
 const end = indexSource.indexOf("  @Monitor('appearance.themeMode')", start);
 assert.ok(start >= 0 && end > start, 'The production navigation-control method block must remain extractable.');
 const methods = indexSource.slice(start, end).replace(/^\s*@Monitor\([^\n]*\)\s*\n/gm, '\n');
+const notificationsStart = indexSource.indexOf('  private openNotifications(');
+const notificationsEnd = indexSource.indexOf('  private openCategory(', notificationsStart);
+assert.ok(notificationsStart >= 0 && notificationsEnd > notificationsStart);
+const notificationNavigation = indexSource.slice(notificationsStart, notificationsEnd);
 const { TopicScrollPolicy } = load(readSource('services/TopicScrollPolicy'));
 const ScrollSource = { DRAG: 1, FLING: 2, OTHER_USER_INPUT: 3, SCROLLER: 4, SCROLLER_ANIMATION: 5, NONE: 0 };
 const ScrollState = { Scroll: 1, Fling: 2, Idle: 0 };
-const { IndexNavigation } = load(`export class IndexNavigation {\n${methods}\n}`, {
+const { IndexNavigation } = load(`export class IndexNavigation {\n${methods}\n${notificationNavigation}\n}`, {
   ScrollSource
 });
 
@@ -45,31 +49,34 @@ const { IndexNavigation } = load(`export class IndexNavigation {\n${methods}\n}`
 // and animation continuity still require device acceptance. No UI, Web,
 // cookies or device I/O are loaded.
 function navigationRuntime() {
-  const scrollers = Array.from({ length: 4 }, (_, index) => ({
+  const scrollers = Array.from({ length: 5 }, (_, index) => ({
     index, offset: 300, reads: 0,
     currentOffset() { this.reads++; return { xOffset: 0, yOffset: this.offset }; }
   }));
   let pathDepth = 0;
+  const tabChanges = [];
+  const routeEvents = [];
   const navigation = new IndexNavigation();
   Object.assign(navigation, {
     latestScroller: scrollers[0], categoriesScroller: scrollers[1],
-    searchScroller: scrollers[2], profileScroller: scrollers[3],
+    searchScroller: scrollers[2], notificationsScroller: scrollers[3], profileScroller: scrollers[4],
     navigationScrollPolicy: new TopicScrollPolicy(),
     navigationCollapsed: false, currentIndex: 0, showBrowser: false, mainPageVisible: true, topInset: 64,
     appearance: { reduceMotion: false, highContrast: false },
-    paths: { size: () => pathDepth }
+    paths: { size: () => pathDepth, clear: () => { pathDepth = 0; routeEvents.push('clear'); } },
+    controller: { changeIndex: index => { tabChanges.push(index); routeEvents.push(`tab:${index}`); } }
   });
-  return { navigation, scrollers, setPathDepth: depth => { pathDepth = depth; } };
+  return { navigation, scrollers, tabChanges, routeEvents, setPathDepth: depth => { pathDepth = depth; } };
 }
 
-test('all four pages resolve distinct retained Scrollers and keep their original offsets across page changes', () => {
+test('all five pages resolve distinct retained Scrollers and keep their original offsets across page changes', () => {
   const { navigation, scrollers } = navigationRuntime();
-  assert.equal(new Set([0, 1, 2, 3].map(index => navigation.navigationScroller(index))).size, 4);
+  assert.equal(new Set([0, 1, 2, 3, 4].map(index => navigation.navigationScroller(index))).size, 5);
   scrollers.forEach((scroller, index) => {
     scroller.offset = (index + 1) * 100;
     assert.strictEqual(navigation.navigationScroller(index), scroller);
   });
-  for (const index of [3, 2, 1, 0, 2, 3]) {
+  for (const index of [4, 3, 2, 1, 0, 2, 3, 4]) {
     navigation.currentIndex = index;
     navigation.resetNavigation();
     navigation.readNavigationScroll(index, 40, ScrollState.Scroll, ScrollSource.SCROLLER);
@@ -79,7 +86,7 @@ test('all four pages resolve distinct retained Scrollers and keep their original
 });
 
 test('each active page collapses while reading forward and expands for reverse reading, reset or returning to the beginning', () => {
-  for (let index = 0; index < 4; index++) {
+  for (let index = 0; index < 5; index++) {
     const { navigation, scrollers } = navigationRuntime();
     navigation.currentIndex = index;
     navigation.readNavigationScroll(index, 20, ScrollState.Scroll, ScrollSource.DRAG);
@@ -104,7 +111,7 @@ test('each active page collapses while reading forward and expands for reverse r
     assert.equal(navigation.navigationCollapsed, false, 'Reset must clear partial forward travel.');
     navigation.readNavigationScroll(index, 31, ScrollState.Scroll, ScrollSource.DRAG);
     assert.equal(navigation.navigationCollapsed, true);
-    scrollers[index].offset = index < 2 ? -navigation.topInset : 0;
+    scrollers[index].offset = index === 1 ? -navigation.topInset : 0;
     navigation.readNavigationScroll(index, -1, ScrollState.Scroll, ScrollSource.DRAG);
     assert.equal(navigation.navigationCollapsed, false, 'The beginning always exposes the complete navigation.');
     assert.equal(scrollers.filter(scroller => scroller.reads > 0).length, 1);
@@ -178,13 +185,13 @@ test('actual root visibility blocks hidden-page scrolling and restores expanded 
   }
 });
 
-test('forward reading beyond an inset-backed start collapses even with a negative raw offset, and the true start expands', () => {
-  for (let index = 0; index < 4; index++) {
+test('fixed-header pages start at zero while the inset-backed category page starts at minus topInset', () => {
+  for (let index = 0; index < 5; index++) {
     const { navigation, scrollers } = navigationRuntime();
     navigation.currentIndex = index;
-    // Latest/categories use contentStartOffset=topInset. Search/profile have
-    // their header outside the scroll content and therefore start at raw zero.
-    const initialOffset = index < 2 ? -navigation.topInset : 0;
+    // Only categories use contentStartOffset=topInset. The fixed home header,
+    // search/messages/profile sit outside their lists, whose native start is zero.
+    const initialOffset = index === 1 ? -navigation.topInset : 0;
     scrollers[index].offset = initialOffset;
     navigation.readNavigationScroll(index, 0, ScrollState.Scroll, ScrollSource.DRAG);
     assert.equal(navigation.navigationCollapsed, false);
@@ -192,13 +199,34 @@ test('forward reading beyond an inset-backed start collapses even with a negativ
     navigation.readNavigationScroll(index, 16, ScrollState.Scroll, ScrollSource.DRAG);
     assert.equal(navigation.navigationCollapsed, false);
     scrollers[index].offset = initialOffset + 32;
-    if (index < 2) { assert.ok(scrollers[index].offset < 0); }
+    if (index === 1) { assert.ok(scrollers[index].offset < 0); }
+    else { assert.equal(scrollers[index].offset, 32); }
     navigation.readNavigationScroll(index, 16, ScrollState.Scroll, ScrollSource.DRAG);
     assert.equal(navigation.navigationCollapsed, true,
-      'A negative native offset after reading 32 vp is not the initial content position.');
+      'Reading 32 vp collapses each page, including categories whose native offset remains negative.');
     scrollers[index].offset = initialOffset;
     navigation.readNavigationScroll(index, -1, ScrollState.Scroll, ScrollSource.DRAG);
     assert.equal(navigation.navigationCollapsed, false,
       'The final one-vp step to the real start expands immediately, without waiting for reverse-travel hysteresis.');
+  }
+});
+
+test('notification shortcuts expose the retained messages tab and leave no duplicate child route', () => {
+  for (const initialDepth of [0, 1, 3]) {
+    const { navigation, scrollers, tabChanges, routeEvents, setPathDepth } = navigationRuntime();
+    navigation.currentIndex = 4;
+    navigation.mainPageVisible = initialDepth === 0;
+    navigation.navigationCollapsed = true;
+    setPathDepth(initialDepth);
+    scrollers[3].offset = 420;
+    navigation.openNotifications();
+    assert.equal(navigation.paths.size(), 0);
+    assert.equal(navigation.mainPageVisible, true);
+    assert.equal(navigation.navigationCollapsed, false);
+    assert.equal(navigation.currentIndex, 3);
+    assert.deepEqual(tabChanges, [3]);
+    assert.deepEqual(routeEvents, initialDepth > 0 ? ['clear', 'tab:3'] : ['tab:3']);
+    assert.strictEqual(navigation.navigationScroller(navigation.currentIndex), scrollers[3]);
+    assert.equal(scrollers[3].offset, 420, 'The shortcut must preserve the retained notification list position.');
   }
 });

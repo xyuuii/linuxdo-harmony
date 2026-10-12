@@ -50,15 +50,15 @@
     },
     {
       "name": "reading_glass_tint",
-      "value": "#991B212C"
+      "value": "#501B212C"
     },
     {
       "name": "reading_glass_rim",
-      "value": "#40FFFFFF"
+      "value": "#30FFFFFF"
     },
     {
-      "name": "reading_glass_shadow",
-      "value": "#66000000"
+      "name": "reading_glass_selection",
+      "value": "#247FA9EB"
     }
   ]
 }

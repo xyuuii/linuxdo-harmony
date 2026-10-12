@@ -20,6 +20,7 @@ export interface TopicListResponseWire { topic_list?: TopicListWire; users?: Use
 export interface CategoryWire {
   id?: number; name?: string; slug?: string; color?: string; text_color?: string; description?: string;
   topic_count?: number; parent_category_id?: number; subcategory_list?: CategoryWire[];
+  permission?: number; minimum_required_tags?: number; topic_template?: string; topic_title_placeholder?: string;
 }
 export interface CategoryListWire { categories?: CategoryWire[]; }
 export interface CategoryResponseWire { category_list?: CategoryListWire; }
@@ -36,6 +37,7 @@ export interface PostStreamWire { posts?: PostWire[]; stream?: number[]; }
 export interface TopicDetailsWire { can_create_post?: boolean; }
 export interface TopicDetailWire {
   id?: number; title?: string; category_id?: number; post_stream?: PostStreamWire; valid_reactions?: string[];
+  tags?: Array<string | TagWire>; posts_count?: number; reply_count?: number; highest_post_number?: number;
   closed?: boolean; archived?: boolean; details?: TopicDetailsWire;
 }
 export interface PostStreamResponseWire { post_stream?: PostStreamWire; replies?: PostWire[]; posts?: PostWire[]; }
@@ -55,6 +57,9 @@ export interface CsrfWire { csrf?: string; }
 export interface CurrentUserWire { current_user?: UserWire; }
 export interface UserResponseWire { user?: UserWire; }
 export interface PostResponseWire { post?: PostWire; }
+export interface TopicCreationWire extends PostWire {
+  post?: PostWire; action?: string; success?: boolean; pending_count?: number; errors?: string[]; error?: string;
+}
 export interface UploadResponseWire { short_url?: string; url?: string; original_filename?: string; width?: number; height?: number; }
 export interface LoginResponseWire {
   user?: UserWire; error?: string; reason?: string; totp_enabled?: boolean; backup_enabled?: boolean;
@@ -126,7 +131,9 @@ export function topicFromWire(value: TopicWire): Topic {
     return { userId: numberValue(poster.user_id), description: text(poster.description) };
   });
   return { id: requireId(value.id), title: plainText(value.title), slug: text(value.slug),
-    postsCount: numberValue(value.posts_count), replyCount: numberValue(value.reply_count), views: numberValue(value.views),
+    postsCount: numberValue(value.posts_count),
+    replyCount: Math.max(0, numberValue(value.posts_count, numberValue(value.reply_count) + 1) - 1),
+    views: numberValue(value.views),
     likeCount: numberValue(value.like_count), categoryId: numberValue(value.category_id), createdAt: text(value.created_at),
     lastPostedAt: text(value.last_posted_at), bumpedAt: text(value.bumped_at), pinned: bool(value.pinned),
     closed: bool(value.closed), unseen: bool(value.unseen), excerpt: plainText(text(value.excerpt)),
@@ -137,6 +144,8 @@ export function categoryFromWire(value: CategoryWire, depth: number = 0): Catego
   return { id: requireId(value.id), name: value.name, slug: text(value.slug), color: text(value.color, '0A59F7'),
     textColor: text(value.text_color, 'FFFFFF'), description: plainText(text(value.description)),
     topicCount: numberValue(value.topic_count), parentCategoryId: numberValue(value.parent_category_id),
+    canCreateTopic: value.permission === 1, minimumRequiredTags: Math.max(0, numberValue(value.minimum_required_tags)),
+    topicTemplate: text(value.topic_template), topicTitlePlaceholder: text(value.topic_title_placeholder),
     subcategoryList: list(value.subcategory_list).map((child: CategoryWire): Category => categoryFromWire(child, depth + 1)) };
 }
 export function reactionFromWire(value: ReactionWire): Reaction {
@@ -169,8 +178,21 @@ export function detailFromWire(value: TopicDetailWire): TopicDetail {
   const closed: boolean = bool(value.closed);
   const archived: boolean = bool(value.archived);
   const canCreatePost: boolean = value.details ? bool(value.details.can_create_post) : false;
+  const stream: PostStream = streamFromWire(value.post_stream);
+  const tags: string[] = [];
+  list(value.tags).forEach((tag: string | TagWire): void => {
+    const name: string = typeof tag === 'string' ? tag :
+      tag !== null && typeof tag === 'object' ? text(tag.name) : '';
+    if (name.trim().length > 0 && !tags.includes(name)) { tags.push(name); }
+  });
+  const highestPostNumber: number = Math.max(stream.stream.length,
+    ...stream.posts.map((post: Post): number => post.postNumber), numberValue(value.highest_post_number));
   return { id: requireId(value.id), title: plainText(value.title), categoryId: numberValue(value.category_id),
-    postStream: streamFromWire(value.post_stream), validReactions: list(value.valid_reactions)
+    // Discourse reply_count counts explicit reply_to_post_number relationships, not all topic replies.
+    // posts_count includes the original post; the full stream is the compatible missing-field fallback.
+    tags: tags, replyCount: Math.max(0, numberValue(value.posts_count, stream.stream.length) - 1),
+    highestPostNumber: highestPostNumber,
+    postStream: stream, validReactions: list(value.valid_reactions)
       .filter((reaction: string): boolean => typeof reaction === 'string'),
     closed: closed, archived: archived, details: { canCreatePost: canCreatePost },
     canReply: canCreatePost && !closed && !archived };

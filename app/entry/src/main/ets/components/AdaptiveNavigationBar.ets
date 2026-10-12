@@ -5,12 +5,13 @@ import { navigationMorphFrame, NavigationMorphFrame } from '../services/Navigati
 
 interface NavigationEntry { index: number; title: string; symbol: Resource; }
 
-/** One persistent surface and four persistent icon nodes, continuously merging to the selected icon. */
+/** One persistent surface and five persistent icon nodes, continuously merging to the selected icon. */
 @ComponentV2
 export struct AdaptiveNavigationBar {
   @Param currentIndex: number = 0;
   @Param collapsed: boolean = false;
   @Param bottomInset: number = 0;
+  @Param unreadCount: number = 0;
   @Param appearance: AppearanceSettings = loadAppearanceSettings();
   @Param sideLeft: boolean = false;
   @Event onSelect: (index: number) => void = (_index: number): void => {};
@@ -24,10 +25,11 @@ export struct AdaptiveNavigationBar {
   private handGeneration: number = 0;
   private suppressDoubleTapUntil: number = 0;
   private readonly entries: NavigationEntry[] = [
-    { index: 0, title: '最新', symbol: $r('sys.symbol.house') },
+    { index: 0, title: '话题', symbol: $r('sys.symbol.message') },
     { index: 1, title: '分类', symbol: $r('sys.symbol.square_grid_2x2') },
     { index: 2, title: '搜索', symbol: $r('sys.symbol.magnifyingglass') },
-    { index: 3, title: '我的', symbol: $r('sys.symbol.person') }
+    { index: 3, title: '消息', symbol: $r('sys.symbol.bell') },
+    { index: 4, title: '我的', symbol: $r('sys.symbol.person') }
   ];
 
   @Computed
@@ -37,8 +39,16 @@ export struct AdaptiveNavigationBar {
 
   @Computed
   get selectedIndex(): number {
-    return Number.isFinite(this.currentIndex) ? Math.max(0, Math.min(3, Math.floor(this.currentIndex))) : 0;
+    return Number.isFinite(this.currentIndex) ? Math.max(0, Math.min(4, Math.floor(this.currentIndex))) : 0;
   }
+
+  @Computed
+  get safeUnreadCount(): number {
+    return Number.isFinite(this.unreadCount) ? Math.max(0, Math.floor(this.unreadCount)) : 0;
+  }
+
+  @Computed
+  get unreadBadgeWidth(): number { return this.safeUnreadCount > 99 ? 24 : this.safeUnreadCount > 9 ? 20 : 16; }
 
   @Computed
   get safeBottomInset(): number {
@@ -106,6 +116,13 @@ export struct AdaptiveNavigationBar {
   private tab(entry: NavigationEntry) {
     Button({ type: ButtonType.Normal, buttonStyle: ButtonStyleMode.TEXTUAL }) {
       Stack({ alignContent: Alignment.TopStart }) {
+        if (entry.index === this.selectedIndex) {
+          Blank().width(this.frame(entry.index).buttonWidth - 8).height(this.frame(entry.index).surfaceHeight - 8)
+            .backgroundColor(this.appearance.highContrast || this.appearance.effectLevel === 0 ?
+              $r('app.color.selected_background') : $r('app.color.reading_glass_selection'))
+            .borderRadius(this.frame(entry.index).surfaceHeight / 2)
+            .position({ x: 4, y: 4 }).opacity(this.frame(entry.index).labelOpacity)
+        }
         SymbolGlyph(entry.symbol).fontSize(23)
           .fontColor([entry.index === this.selectedIndex ? $r('app.color.accent') : $r('app.color.text_secondary')])
           .position({ x: (this.frame(entry.index).buttonWidth - 23) / 2, y: this.frame(entry.index).iconTop })
@@ -113,6 +130,15 @@ export struct AdaptiveNavigationBar {
           .fontColor(entry.index === this.selectedIndex ? $r('app.color.accent') : $r('app.color.text_secondary'))
           .width(this.frame(entry.index).buttonWidth).height(18).textAlign(TextAlign.Center)
           .position({ x: 0, y: 32 }).opacity(this.frame(entry.index).labelOpacity)
+        if (entry.index === 3 && this.safeUnreadCount > 0) {
+          Text(this.safeUnreadCount > 99 ? '99+' : String(this.safeUnreadCount))
+            .fontSize(10).fontWeight(FontWeight.Medium).fontColor(Color.White)
+            .backgroundColor('#C5473C').borderRadius(9).textAlign(TextAlign.Center)
+            .width(this.unreadBadgeWidth).height(16)
+            .position({ x: Math.min(this.frame(entry.index).buttonWidth - this.unreadBadgeWidth - 2,
+              this.frame(entry.index).buttonWidth / 2 + 5), y: this.frame(entry.index).iconTop - 3 })
+            .id('main_navigation_unread_badge')
+        }
       }.width(this.frame(entry.index).buttonWidth).height(this.frame(entry.index).surfaceHeight)
         .hitTestBehavior(HitTestMode.None)
     }.width(this.frame(entry.index).buttonWidth).height(this.frame(entry.index).surfaceHeight)
@@ -123,8 +149,8 @@ export struct AdaptiveNavigationBar {
       .enabled(!this.shouldCollapse || entry.index === this.selectedIndex)
       .accessibilityLevel(this.shouldCollapse && entry.index !== this.selectedIndex ? 'no-hide-descendants' : 'yes')
       .accessibilitySelected(entry.index === this.selectedIndex)
-      .accessibilityText(this.shouldCollapse ? `当前${entry.title}，展开底部导航` : entry.title)
-      .accessibilityDescription(!this.shouldCollapse && entry.index === 0 ? '双击回到首页顶部并刷新' : '')
+      .accessibilityText(`${this.shouldCollapse ? `当前${entry.title}，展开底部导航` : entry.title}${entry.index === 3 ? `，${this.safeUnreadCount} 条未读` : ''}`)
+      .accessibilityDescription(!this.shouldCollapse && entry.index === 0 ? '双击回到话题列表顶部并刷新' : '')
       .id(this.shouldCollapse && entry.index === this.selectedIndex ? 'main_navigation_restore' : `main_navigation_tab_${entry.index}`)
       .onClick((): void => { this.activate(entry.index); })
       .parallelGesture(TapGesture({ count: 2 }).onAction((): void => {

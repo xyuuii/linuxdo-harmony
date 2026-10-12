@@ -25,6 +25,7 @@ export interface PostBlock {
   heading: boolean;
   imageWidth: number;
   imageHeight: number;
+  codeLanguage?: string;
 }
 
 interface InlineStyle {
@@ -98,13 +99,15 @@ export function parsePostContent(cooked: string): PostBlock[] {
   let quoteDepth: number = 0;
   const quoteTags: string[] = [];
   let preDepth: number = 0;
+  let codeLanguage: string = '';
   let heading: boolean = false;
   let runIndex: number = 0;
   let listPrefix: string = '';
   const flush = (): void => {
     if (runs.some((run: PostInline): boolean => run.text.trim().length > 0 || run.emojiUrl.length > 0)) {
       blocks.push({ key: `block-${blocks.length}`, kind: preDepth > 0 ? 'code' : 'paragraph',
-        runs: runs, quote: quoteDepth > 0, url: '', description: '', heading: heading, imageWidth: 0, imageHeight: 0 });
+        runs: runs, quote: quoteDepth > 0, url: '', description: '', heading: heading, imageWidth: 0, imageHeight: 0,
+        codeLanguage: preDepth > 0 ? codeLanguage : '' });
     }
     runs = [];
   };
@@ -190,7 +193,15 @@ export function parsePostContent(cooked: string): PostBlock[] {
       quoteTags.pop();
       quoteDepth = Math.max(0, quoteDepth - 1);
     }
-    if (tag === 'pre') { preDepth = Math.max(0, preDepth + (closing ? -1 : 1)); }
+    if (tag === 'pre') {
+      preDepth = Math.max(0, preDepth + (closing ? -1 : 1));
+      if (preDepth === 0 || !closing) { codeLanguage = ''; }
+    }
+    if (tag === 'code' && !closing && preDepth > 0) {
+      const language: RegExpExecArray | null = /(?:^|\s)(?:language|lang)-([a-z0-9_+#.-]{1,32})(?:\s|$)/i
+        .exec(attribute(token, 'class'));
+      codeLanguage = language === null ? '' : language[1];
+    }
     if (/^h[1-6]$/.test(tag)) { heading = !closing; }
     if (tag === 'ul' || tag === 'ol') {
       if (closing) { lists.pop(); }
@@ -341,7 +352,7 @@ export struct RichPostContent {
   get blocks(): PostBlock[] { return parsePostContent(this.cooked); }
 
   build() {
-    Column({ space: this.inlineContent ? 0 : this.compact ? 6 : 12 }) {
+    Column({ space: this.inlineContent ? 0 : this.compact ? 6 : 14 }) {
       ForEach(this.blocks, (block: PostBlock) => {
         if (block.kind === 'divider') {
           Divider().color($r('app.color.divider')).margin({ top: 8, bottom: 8 })
@@ -351,6 +362,12 @@ export struct RichPostContent {
             compact: this.compact, ownerId: this.session.user?.id || 0,
             onPicture: (url: string): void => this.onPicture(url) }).width('100%')
         } else {
+          Column({ space: 0 }) {
+          if (block.kind === 'code') {
+            Text(block.codeLanguage || '代码').fontSize(11).fontColor($r('app.color.text_secondary'))
+              .padding({ left: 12, right: 12, top: 11, bottom: 11 }).width('100%')
+            Divider().color($r('app.color.divider'))
+          }
           Text() {
             ForEach(block.runs, (run: PostInline) => {
               if (run.emojiUrl && this.emojiUris.has(run.emojiUrl)) {
@@ -369,13 +386,14 @@ export struct RichPostContent {
               }
             }, (run: PostInline): string => run.key)
           }
-          .fontSize(this.inlineContent ? 13 : block.heading ? 21 : this.compact ? 14 : block.kind === 'code' ? 14 : 16)
-          .lineHeight(this.inlineContent ? 20 : this.compact ? 22 : 28)
+          .fontSize(this.inlineContent ? 13 : block.heading ? 21 : this.compact ? 14 : block.kind === 'code' ? 14 : 17)
+          .lineHeight(this.inlineContent ? 20 : this.compact ? 22 : block.kind === 'code' ? 24 : 28)
           .textAlign(TextAlign.Start).width(this.inlineContent ? 'auto' : '100%')
           .copyOption(CopyOptions.InApp)
           .padding(block.quote || block.kind === 'code' ? 12 : 0)
+          }.width(this.inlineContent ? 'auto' : '100%').alignItems(HorizontalAlign.Start)
           .backgroundColor(block.quote || block.kind === 'code' ? $r('app.color.selected_background') : Color.Transparent)
-          .borderRadius(block.quote || block.kind === 'code' ? 10 : 0)
+          .borderRadius(block.quote || block.kind === 'code' ? 10 : 0).clip(block.quote || block.kind === 'code')
           .border({ width: { left: block.quote ? 3 : 0 }, color: $r('app.color.accent') })
         }
       }, (block: PostBlock): string => block.key)

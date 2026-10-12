@@ -44,6 +44,7 @@ const topicSource = source('pages/TopicPage');
 const richSource = source('components/RichPostContent');
 const rich = load(extract(richSource, 'export interface PostInline', '@ComponentV2'));
 const scroll = load(source('services/TopicScrollPolicy'));
+const { flattenCategories } = load(source('models/ForumModels'));
 const ScrollSource = { NONE: 0, DRAG: 1, FLING: 2, OTHER_USER_INPUT: 3, SCROLLER: 4, SCROLLER_ANIMATION: 5 };
 const ScrollState = { Idle: 0, Scroll: 1, Fling: 2 };
 const declarations = extract(topicSource, 'export interface TopicTreeRow', '@ComponentV2');
@@ -71,12 +72,14 @@ function readerRuntime() {
   const messages = [];
   const session = { user: { id: 7 }, revision: 1 };
   const prohibited = () => { throw new Error('Native I/O is prohibited in reader method tests.'); };
-  const api = { fetchTopic: prohibited, fetchPosts: prohibited, getUserAgent: prohibited, toggleReaction: prohibited };
+  const api = { fetchTopic: prohibited, fetchPosts: prohibited, getUserAgent: prohibited, toggleReaction: prohibited,
+    cachedCategories: () => [], fetchCategories: prohibited };
   class ForumApiError extends Error { constructor(kind, message) { super(message); this.kind = kind; } }
   const exports = load(declarations + '\n' + pageClass, {
     forumSession: session,
     loadAppearanceSettings: () => ({}),
     parsePostContent: rich.parsePostContent,
+    flattenCategories,
     postContentUrl: rich.postContentUrl,
     ...scroll,
     ScrollSource,
@@ -129,6 +132,46 @@ function readerRuntime() {
 function imagePost(id, cooked) {
   return { id, postNumber: id, topicId: 100, cooked, replyToPostNumber: 0, replyCount: 0 };
 }
+
+test('reader floor progress uses the full highest floor and stays bounded across empty or stale state', () => {
+  const { page } = readerRuntime();
+  assert.equal(page.totalFloors, 1);
+  page.topic = { highestPostNumber: 90, replyCount: 77, postStream: { stream: [1, 22] } };
+  page.posts = [{ id: 22, postNumber: 42 }];
+  page.currentNumber = 42;
+  assert.equal(page.visibleFloor, 42);
+  assert.equal(page.totalFloors, 90);
+  assert.equal(page.topicReplyCount, 77);
+  page.currentNumber = 150;
+  assert.equal(page.visibleFloor, 90);
+  page.topic = { postStream: { stream: [1, 22] } };
+  assert.equal(page.totalFloors, 42, 'Loaded floor numbers can exceed the stream count after deleted posts.');
+  assert.equal(page.topicReplyCount, 1);
+});
+
+test('reader category metadata uses the cached nested category and ignores late responses after ownership or navigation changes', async () => {
+  const { page, api, session } = readerRuntime();
+  const category = { id: 8, name: '开发调优', subcategoryList: [] };
+  page.topic = { categoryId: 8 };
+  api.cachedCategories = () => [{ id: 1, subcategoryList: [category] }];
+  await page.loadTopicCategory(8, page.generation, session.user.id);
+  assert.strictEqual(page.topicCategory, category);
+  api.cachedCategories = () => [];
+  for (const invalidation of ['owner', 'generation', 'hidden', 'category']) {
+    session.user = { id: 7 }; page.hidden = false; page.topic = { categoryId: 8 };
+    page.topicCategory = undefined;
+    let release;
+    api.fetchCategories = () => new Promise(resolve => { release = resolve; });
+    const pending = page.loadTopicCategory(8, page.generation, 7);
+    if (invalidation === 'owner') { session.user = { id: 9 }; }
+    if (invalidation === 'generation') { page.generation++; }
+    if (invalidation === 'hidden') { page.hidden = true; }
+    if (invalidation === 'category') { page.topic = { categoryId: 11 }; }
+    release([category]);
+    await pending;
+    assert.equal(page.topicCategory, undefined, invalidation);
+  }
+});
 
 test('returning before a like completes queues exactly one visible server confirmation and never repeats the toggle', async () => {
   const rt = readerRuntime();
