@@ -2,6 +2,7 @@
 
 [![Logic tests](https://github.com/xyuuii/linuxdo-harmony/actions/workflows/logic-tests.yml/badge.svg)](https://github.com/xyuuii/linuxdo-harmony/actions/workflows/logic-tests.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![LINUX DO 社区](https://img.shields.io/badge/LINUX-DO-FFB003.svg)](https://linux.do/)
 
 社区开发的第三方 LINUX DO 客户端，也是 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的鸿蒙功能衍生项目。感谢原作者 [xuemk](https://github.com/xuemk)；原介绍帖：[LINUX DO](https://linux.do/t/topic/2998703)。本仓库独立实现 ArkTS / ArkUI 原生页面与系统能力，公开源码采用 Apache-2.0。
 
@@ -13,7 +14,7 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 调试包：[0.3.0 GitHub Release](https://github.com/xyuuii/linuxdo-harmony/releases/tag/v0.3.0) · [下载 HAP](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.3.0/LinuxDo-HarmonyOS7-0.3.0-debug.hap) · [SHA256 校验文件](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.3.0/SHA256SUMS)。这是开发调试签名包，安装受签名设备授权限制；其他设备请按下方构建说明使用自己的开发者签名。二进制保存在 Release 附件中。
 
-0.3.0 更新五入口导航、首页连续滑动分页、独立页面缓存、通知分类筛选及原生新建话题编辑器。布局参考官方 iOS 客户端与鸿蒙 IT之家，玻璃材质减淡并去掉多余投影；发布、草稿及键盘布局沿用鸿蒙原生交互。感谢社区佬友 [@xmk2025](https://linux.do/u/xmk2025) 的[原帖](https://linux.do/t/topic/2998703)与 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 提供功能参考。本项目认可并链接 [LINUX DO 社区](https://linux.do/)；这是独立的第三方客户端，与社区官方客户端区分。
+0.3.0 更新五入口导航、首页连续滑动分页、独立页面缓存、通知分类筛选及原生新建话题编辑器。布局参考官方 iOS 客户端与鸿蒙 IT之家，玻璃材质减淡并去掉多余投影；发布、草稿及键盘布局沿用鸿蒙原生交互。社区友链与项目来源见[社区与致谢](#社区与致谢)。
 
 0.1.1 收紧首页、分类和搜索的信息密度：话题标题最多两行，缩小卡片留白；分类等级与名称同排。分类详情移除了重复标题和不适用的底部页签预留，列表用满可用高度。首页和搜索仅在滚动末端为浮动页签留空间。
 
@@ -182,6 +183,14 @@ macOS 上如遇 CLI 把已有镜像误判未下载，可用 `./scripts/start-emu
 - `services/`：论坛协议、网络/浏览器传输、媒体缓存与材质策略。
 - `tests/`：读取实际 .ets 的离线 fixture。
 - `scripts/`：构建入口和既有模拟器启动。
+
+## 社区与致谢
+
+本项目认可并支持 [LINUX DO 社区](https://linux.do/)，感谢社区提供的交流平台，以及佬友们的建议与反馈。
+
+特别感谢社区佬友 [@xmk2025](https://linux.do/u/xmk2025) 发布的[安卓原生客户端介绍帖](https://linux.do/t/topic/2998703)，以及 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 提供的功能与接口行为参考。鸿蒙版本使用 ArkTS / ArkUI 独立实现，具体来源与许可边界见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+
+本项目由社区成员维护，是第三方客户端；上述社区友链和致谢不表示 LINUX DO 官方认证或背书。
 
 ## 贡献与许可
 
