@@ -188,6 +188,8 @@ macOS 上如遇 CLI 把已有镜像误判未下载，可用 `./scripts/start-emu
 
 本项目认可并支持 [LINUX DO 社区](https://linux.do/)，感谢社区提供的交流平台，以及佬友们的建议与反馈。
 
+社区介绍与讨论：[LINUX DO 鸿蒙 NEXT 原生客户端 v0.3.0](https://linux.do/t/topic/3012205)。
+
 特别感谢社区佬友 [@xmk2025](https://linux.do/u/xmk2025) 发布的[安卓原生客户端介绍帖](https://linux.do/t/topic/2998703)，以及 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 提供的功能与接口行为参考。鸿蒙版本使用 ArkTS / ArkUI 独立实现，具体来源与许可边界见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 
 本项目由社区成员维护，是第三方客户端；上述社区友链和致谢不表示 LINUX DO 官方认证或背书。
