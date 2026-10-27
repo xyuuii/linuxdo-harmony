@@ -1,4 +1,5 @@
 import { ReaderGlassSurface } from '../components/ReaderGlassSurface';
+import { MaterialBarHost } from '../components/MaterialBarHost';
 import { BoostBubble } from '../components/BoostBubble';
 import { common } from '@kit.AbilityKit';
 import { window, curves, ButtonModifier, LengthMetrics, ColorMetrics, uiMaterial } from '@kit.ArkUI';
@@ -11,10 +12,11 @@ import { AppearanceSettings, loadAppearanceSettings } from '../models/Appearance
 import { Boost, Category, Post, Reaction, TopicDetail, flattenCategories, measureBoost } from '../models/ForumModels';
 import { ForumSession, forumSession } from '../models/ForumSession';
 import { forumApi, ForumApiError, ForumErrorKind, RequestCancellation } from '../services/ForumApi';
-import { materialFor } from '../services/MaterialPolicy';
+import { materialFor, readerBackdropFor } from '../services/MaterialPolicy';
 import { RichPostContent, postContentUrl, parsePostContent, PostBlock } from '../components/RichPostContent';
 import { ForumAvatar } from '../components/ForumComponents';
 import { ForumImageViewer } from '../components/ForumImageViewer';
+import { NativeForumImage } from '../components/NativeForumImage';
 import { relativeTime } from '../services/ForumPresentation';
 import { TopicScrollPolicy, endPullProgress, canShowTopicEnd } from '../services/TopicScrollPolicy';
 
@@ -194,6 +196,7 @@ struct TopicPostCard {
   @Param busy: boolean = false;
   @Param highlighted: boolean = false;
   @Param reactions: string[] = [];
+  @Param reactionEmojiUrls: Map<string, string> = new Map<string, string>();
   @Param reduceMotion: boolean = false;
   @Param loggedIn: boolean = false;
   @Event onReply: (post: Post) => void = (_post: Post): void => {};
@@ -249,10 +252,31 @@ struct TopicPostCard {
   }
 
   @Builder
+  reactionIcon(reaction: string) {
+    if (reaction === 'heart') {
+      Text('♡').fontSize(18).fontColor($r('app.color.text_secondary')).width(18).height(18)
+    } else if (this.reactionEmojiUrls.has(reaction)) {
+      NativeForumImage({ url: this.reactionEmojiUrls.get(reaction) || '', fit: ImageFit.Contain,
+        accessibleLabel: `${reaction} 表情`, previewImageAspectRatio: 0 }).width(18).height(18)
+    } else {
+      Text('◌').fontSize(18).fontColor($r('app.color.text_secondary')).width(18).height(18)
+        .accessibilityText(`${reaction} 表情暂不可用`)
+    }
+  }
+
+  @Builder
+  reactionOption(reaction: string) {
+    Row({ space: 10 }) {
+      this.reactionIcon(reaction)
+      Text(reaction === 'heart' ? '喜欢' : reaction).fontSize(14).fontColor($r('app.color.text_primary'))
+    }.padding({ left: 12, right: 12, top: 10, bottom: 10 })
+  }
+
+  @Builder
   reactionMenu() {
     Menu() {
       ForEach(this.reactionChoices, (reaction: string) => {
-        MenuItem({ content: reaction === 'heart' ? '♡ 喜欢' : reaction })
+        MenuItem(() => { this.reactionOption(reaction) })
           .enabled(this.canReact).onClick(() => { this.onReact(this.post, reaction); })
       }, (reaction: string): string => reaction)
     }
@@ -339,9 +363,13 @@ struct TopicPostCard {
       if (this.post.reactions.length > 0) {
         Flex({ wrap: FlexWrap.Wrap }) {
           ForEach(this.post.reactions.filter((reaction: Reaction): boolean => reaction.count > 0 && reaction.id !== 'heart'), (reaction: Reaction) => {
-            Text(`${reaction.id === 'heart' ? '♥' : reaction.id} ${reaction.count}`).fontSize(12)
-              .fontColor($r('app.color.text_secondary')).padding({ left: 8, right: 8, top: 5, bottom: 5 })
+            Row({ space: 4 }) {
+              this.reactionIcon(reaction.id)
+              Text(String(reaction.count)).fontSize(12).fontColor($r('app.color.text_secondary'))
+            }.padding({ left: 8, right: 8, top: 5, bottom: 5 })
               .backgroundColor($r('app.color.selected_background')).borderRadius(14).margin({ right: 6, bottom: 4 })
+              .accessibilityGroup(true).accessibilityText(`${reaction.id} 表情，${reaction.count} 人回应`)
+              .id(`post_reaction_count_${this.post.id}_${reaction.id}`)
           }, (reaction: Reaction): string => reaction.id)
         }.width('100%')
       }
@@ -398,8 +426,7 @@ struct TopicPostCard {
       }
     }.width('100%').alignItems(HorizontalAlign.Start)
       .padding(this.compact ? 10 : 18)
-      .backgroundColor(this.highlighted ? $r('app.color.selected_background') :
-        this.compact ? $r('app.color.page_background') : $r('app.color.surface'))
+      .backgroundColor(this.highlighted ? $r('app.color.selected_background') : $r('app.color.surface'))
       .borderRadius(this.compact ? 6 : 0).id(`post_${this.post.postNumber}`)
   }
 }
@@ -421,6 +448,7 @@ export struct TopicPage {
   @Event onBack: () => void = (): void => {};
   @Local topic: TopicDetail | undefined = undefined;
   @Local topicCategory: Category | undefined = undefined;
+  @Local reactionEmojiUrls: Map<string, string> = new Map<string, string>();
   @Local posts: Post[] = [];
   @Local rows: TopicTreeRow[] = [];
   @Local loading: boolean = false;
@@ -461,6 +489,8 @@ export struct TopicPage {
   private hidden: boolean = false;
   private pendingVisibleReload: number = 0;
   private topicOwnerId: number = 0;
+  private reactionEmojiOwnerId: number = 0;
+  private reactionEmojiGeneration: number = -1;
   private writeRequest: RequestCancellation | undefined = undefined;
   private readonly source: TopicRowsSource = new TopicRowsSource();
   private readonly scroller: Scroller = new Scroller();
@@ -572,6 +602,10 @@ export struct TopicPage {
     this.posts = [];
     this.topic = undefined;
     this.topicCategory = undefined;
+    if ((this.session.user?.id || 0) !== this.reactionEmojiOwnerId ||
+      forumApi.getSessionGeneration() !== this.reactionEmojiGeneration) {
+      this.reactionEmojiUrls = new Map<string, string>();
+    }
     this.pictureScrollOffset = 0;
     this.showPicture = false;
     this.pictureUrl = '';
@@ -778,6 +812,7 @@ export struct TopicPage {
       this.topic = detail;
       this.topicCategory = undefined;
       void this.loadTopicCategory(detail.categoryId, request, owner);
+      void this.loadReactionEmojis(request, owner);
       this.topicOwnerId = owner;
       this.posts = detail.postStream.posts;
       this.consumed = detail.postStream.posts.map((post: Post): number => post.id);
@@ -819,6 +854,18 @@ export struct TopicPage {
     } catch {
       // Category metadata is optional; a failed lookup must not hide the readable topic.
     }
+  }
+
+  private async loadReactionEmojis(request: number, owner: number): Promise<void> {
+    const generation: number = forumApi.getSessionGeneration();
+    try {
+      const urls: Map<string, string> = await forumApi.emojiUrls();
+      if (request !== this.generation || this.hidden || (this.session.user?.id || 0) !== owner ||
+        forumApi.getSessionGeneration() !== generation) { return; }
+      this.reactionEmojiOwnerId = owner;
+      this.reactionEmojiGeneration = generation;
+      this.reactionEmojiUrls = urls;
+    } catch { /* Reaction counts and actions remain available while the catalog is unavailable. */ }
   }
 
   private async loadSlice(previous: boolean): Promise<void> {
@@ -1177,9 +1224,8 @@ export struct TopicPage {
     }.width('100%').height(this.topInset + 56).padding({ left: 8, right: 8, top: this.topInset })
       .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP])
       .backgroundColor(this.appearance.effectLevel === 0 || this.appearance.highContrast ?
-        $r('app.color.surface') : Color.Transparent)
-      .backgroundBlurStyle(this.appearance.effectLevel === 0 || this.appearance.highContrast ?
-        BlurStyle.NONE : BlurStyle.COMPONENT_THIN)
+        $r('app.color.surface') : $r('app.color.reading_glass_tint'))
+      .backgroundEffect(readerBackdropFor(this.appearance))
       .id('topic_immersive_header').zIndex(3)
   }
 
@@ -1246,14 +1292,14 @@ export struct TopicPage {
   @Builder
   readerToolbar() {
     Row({ space: 8 }) {
-      ReaderGlassSurface({ appearance: this.appearance, content: this.readerReplyControl })
+      ReaderGlassSurface({ appearance: this.appearance, content: this.readerReplyControl, nativeBar: true })
         .height(52).width(this.readerReplyWidth).id('topic_reply_glass')
         .opacity(this.readerToolsVisible ? 1 : 0)
         .animation({ duration: this.appearance.reduceMotion ? 0 : 220, curve: Curve.EaseInOut })
         .hitTestBehavior(this.readerToolsVisible ? HitTestMode.Default : HitTestMode.None)
         .accessibilityLevel(this.readerToolsVisible ? 'yes' : 'no-hide-descendants')
       Stack() {
-        ReaderGlassSurface({ appearance: this.appearance, content: this.readerActionControls,
+        ReaderGlassSurface({ appearance: this.appearance, content: this.readerActionControls, nativeBar: true,
           radiusVp: this.readerToolsVisible ? 30 : 26 })
           .width(this.readerToolsVisible ? this.readerActionsWidth : 52)
           .height(this.readerToolsVisible ? 60 : 52).id('topic_actions_glass')
@@ -1290,6 +1336,15 @@ export struct TopicPage {
       .accessibilityLevel(this.endFeedbackProgress > 0.1 ? 'yes' : 'no-hide-descendants')
   }
 
+  @LocalBuilder
+  readerBarContent() {
+    Column() {
+      this.readerToolbar()
+    }.width('100%').height(80 + this.bottomInset)
+      .justifyContent(FlexAlign.End).padding({ bottom: 4 + this.bottomInset })
+      .hitTestBehavior(HitTestMode.Transparent)
+  }
+
   build() {
     NavDestination() {
       Stack({ alignContent: Alignment.TopStart }) {
@@ -1324,7 +1379,8 @@ export struct TopicPage {
                     category: this.topicCategory, tags: this.topic?.tags || [], replyCount: this.topicReplyCount,
                     authorUsername: this.originalAuthor, topicState: this.topic?.archived ? '已归档' : this.topic?.closed ? '已关闭' : '', canReply: this.topic?.canReply || false,
                     busy: this.writeBusy, highlighted: row.post.postNumber > 1 && row.post.id === this.highlightedId,
-                    reactions: this.topic?.validReactions || [], reduceMotion: this.appearance.reduceMotion,
+                    reactions: this.topic?.validReactions || [], reactionEmojiUrls: this.reactionEmojiUrls,
+                    reduceMotion: this.appearance.reduceMotion,
                     loggedIn: this.session.user !== undefined, onLogin: this.onLogin,
                     onReply: (post: Post): void => { this.onCompose(this.topicId, post.postNumber, 0); },
                     onEdit: (post: Post): void => { if (post.canEdit) { this.onCompose(this.topicId, post.postNumber, post.id); } },
@@ -1352,7 +1408,7 @@ export struct TopicPage {
                             this.rebuild();
                           })
                       }
-                    }.width('100%').padding({ left: 8, right: 8 }).backgroundColor($r('app.color.page_background')).borderRadius(6)
+                    }.width('100%').padding({ left: 8, right: 8 }).backgroundColor($r('app.color.surface')).borderRadius(6)
                   }
                   if (row.post.postNumber === 1) {
                     Row({ space: 8 }) {
@@ -1396,11 +1452,13 @@ export struct TopicPage {
       }.width('100%').height('100%')
       if (!this.showPicture) {
         this.readerHeader()
-        Column({ space: 10 }) {
+        Column() {
           this.topicEndFeedback()
-          this.readerToolbar()
         }.width('100%').height('100%').justifyContent(FlexAlign.End)
-          .padding({ bottom: 4 + this.bottomInset }).zIndex(2)
+          .padding({ bottom: 90 + this.bottomInset }).zIndex(2)
+          .hitTestBehavior(HitTestMode.Transparent)
+        MaterialBarHost({ barHeight: 80 + this.bottomInset, barContent: this.readerBarContent })
+          .width('100%').height('100%').zIndex(2)
           .hitTestBehavior(HitTestMode.Transparent)
       }
       if (this.showPicture) {

@@ -276,7 +276,7 @@ export struct TopicFeed {
             }
           }
         }.width('100%').height('100%').padding({ left: 14, right: 14 }).backgroundColor($r('app.color.surface')).id('topic_feed_list')
-        .contentStartOffset(this.categoryId > 0 ? this.topInset : 0)
+        .contentStartOffset(this.categoryId > 0 || this.immersiveTop ? this.topInset : 0)
         .contentEndOffset((this.categoryId > 0 ? 12 : 92) + this.bottomInset)
         .scrollBar(BarState.Off).onWillScroll((offset: number, state: ScrollState, source: ScrollSource): ScrollResult => {
           return this.readScroll(offset, state, source);

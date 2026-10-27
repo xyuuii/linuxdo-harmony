@@ -10,9 +10,11 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 基于 [xuemk/linuxdo-android](https://github.com/xuemk/linuxdo-android) 的真实功能与 Discourse 接口，以 ArkTS / ArkUI V2 重构的鸿蒙原生客户端。固定参考提交 `e31fe8e3a06a5de2e9c013925dd1c40a7743d30e`，源代码版本 1.1.1。
 
-当前应用版本 `0.3.0`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
+当前应用版本 `0.3.1`，包名 `com.xyuuii.linuxdo.harmony`，兼容及目标 SDK 均为 HarmonyOS 7 / API 26。
 
-调试包：[0.3.0 GitHub Release](https://github.com/xyuuii/linuxdo-harmony/releases/tag/v0.3.0) · [下载 HAP](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.3.0/LinuxDo-HarmonyOS7-0.3.0-debug.hap) · [SHA256 校验文件](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.3.0/SHA256SUMS)。这是开发调试签名包，安装受签名设备授权限制；其他设备请按下方构建说明使用自己的开发者签名。二进制保存在 Release 附件中。
+调试包：[0.3.1 GitHub Release](https://github.com/xyuuii/linuxdo-harmony/releases/tag/v0.3.1) · [普通 HAP](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.3.1/LinuxDo-HarmonyOS7-0.3.1-debug.hap) · [edge DoH/ECH 试验 HAP](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.3.1/LinuxDo-HarmonyOS7-0.3.1-edge-ech-trial-debug.hap) · [SHA256 校验文件](https://github.com/xyuuii/linuxdo-harmony/releases/download/v0.3.1/SHA256SUMS)。两者均为开发调试签名包，安装受签名设备授权限制；其他设备请按下方构建说明使用自己的开发者签名。两包同包名，覆盖切换，不能并装。二进制保存在 Release 附件中。
+
+0.3.1 修复图片、动态头像、回应表情与小图显示，改进只读会话恢复并统一楼中楼底色。上下栏可透出滚动文字，底栏在原生 TabBar 区域启用系统光感；主导航改为最大280×52vp的居中胶囊，去掉选中圆底并保留五入口、收放和双击回顶。普通版不默认启用试验 DoH/ECH；试验包的当前验证范围与限制见[实验说明](experiments/ech-probe/README.md)，不承诺全网免代理或长期免验证。
 
 0.3.0 更新五入口导航、首页连续滑动分页、独立页面缓存、通知分类筛选及原生新建话题编辑器。布局参考官方 iOS 客户端与鸿蒙 IT之家，玻璃材质减淡并去掉多余投影；发布、草稿及键盘布局沿用鸿蒙原生交互。社区友链与项目来源见[社区与致谢](#社区与致谢)。
 
@@ -48,7 +50,7 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 ## 界面预览
 
-0.3.0 当前界面（CodexPhone / HarmonyOS 7 模拟器，真实接口内容）：
+0.3.0 历史界面（CodexPhone / HarmonyOS 7 模拟器，真实接口内容；0.3.1 已缩小主导航并修复材质）：
 
 | 首页与五入口 | 分类目录 |
 | --- | --- |
@@ -84,28 +86,32 @@ A native HarmonyOS NEXT client for LINUX DO, inspired by xuemk/linuxdo-android. 
 
 ## 鸿蒙 7 原生设计
 
-使用 `HdsNavigation` 组织页面、`HdsTabs` 切换主页面内容。帖子在 `NavDestination` 内绘制固定的作者/话题双行标题：高度为动态顶部避让加56vp，启用单层系统背景模糊，关闭效果或高对比时使用实色。底部主导航由 AdaptiveNavigationBar 呈现。内容面板保持清晰，浮动主导航与阅读工具采用兼容背景模糊、主题染色与触点流光；设置控件和确认弹窗仍使用系统沉浸材质。预览中的背景是独立静态 SVG，通用控件原生材质使用 API 26 的 `uiMaterial.ImmersiveMaterial`，不将底栏兼容绘制称为原生光学渲染。
+使用 `HdsNavigation` 组织页面、`HdsTabs` 切换主页面内容。帖子在 `NavDestination` 内绘制固定的作者/话题双行标题，高度为动态顶部避让加56vp。首页与帖子顶栏采用透明背景模糊，让滚动文字和图片成为背景采样；关闭效果或高对比时使用实色。
 
-主导航常驻同一个材质 Stack 和五个稳定 key 的图标节点，由一个弹簧 progress 连续驱动表面宽高、位置、图标位移与文字透明度。HdsTabs 的 barHeight 为0，仅保留内容切换；收放由同一表面完成。首页顶部参考手机IT之家，固定品牌/搜索/发帖与文字标签，选中加粗及短下划线；标签不再使用整条玻璃胶囊，消息从底栏进入。内容采用原生Swiper连续跟手分页，拖动中同时显示当前页与邻页；五页分别保留内容、分页及滚动位置，预加载相邻页和点选目标。普通模式点击标签也有过渡，减少动态仍保留手指直接拖动。没有额外手写Pan与列表争抢手势。参考截图只保留在本机，未复制其它App的源码、图标或媒体资源。
+主导航与帖子阅读胶囊由透明的原生 `Tabs` / `TabBar` 展示宿主承载，在 API26 支持的底部 TabBar 区域内通过 `systemMaterial` 使用 `uiMaterial.ImmersiveMaterial`。宿主关闭默认材质和模糊，子按钮使用 `Material.empty`，由胶囊单独承担原生材质与触点光感。原生路径与兼容模糊、染色背板互斥。通知筛选、外观预览等普通内容区域，以及不支持原生材质或构造失败时，使用兼容背景模糊、主题染色和触点层；预览背景仍是独立静态 SVG。其余控件按 `MaterialPolicy` 申请通用系统材质。
+
+`AdaptiveNavigationBar` 主导航展开时最大280×52vp、居中显示，图标21vp、标签11vp；收起为48vp圆钮，底部只保留系统避让。选中项通过图标、文字着色和无障碍选中状态表达，不再添加单项圆形底。2026年10月20日在同一台 Pura X View 对照 IT之家9.01主页实测，客户端展开宽度和底缘与其280×56vp栏对齐。主导航保留一个材质表面和五个稳定 key 的图标节点，由同一个弹簧 progress 连续驱动宽高、位置、图标位移与文字透明度；展开使用完整窗口宽居中，收起仍靠真实左右手侧。`HdsTabs` 的 `barHeight` 为0，只负责业务内容切换；展示宿主不接管原有导航、收放和双击回顶逻辑。
+
+首页顶部固定品牌/搜索/发帖与文字标签，选中加粗及短下划线，消息从底栏进入。内容采用原生 `Swiper` 连续跟手分页，拖动中同时显示当前页与邻页；五页分别保留内容、分页及滚动位置，预加载相邻页和点选目标。普通模式点击标签也有过渡，减少动态仍保留手指直接拖动，没有额外手写 Pan 与列表争抢手势。参考截图只保留在本机，未复制其它 App 的源码、图标或媒体资源。
 
 握姿适配使用官方 `motion.on('holdingHandChanged')`，只依据系统明确的左手/右手结果调整收起按钮侧别，不根据触点、设备倾斜或模拟数据猜测。前台订阅、后台和销毁取消；未握持、双手和未知保持上次明确侧别，没有明确结果时默认右边。机型不支持返回801时保留布局，模拟器无法验证握姿硬件。实现依据[智感握姿最佳实践](https://developer.huawei.com/consumer/cn/doc/best-practices/bpta-smart-reach)及[获取用户动作指导](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/motion-guidelines)。
 
-| 等级 | 通用控件系统材质 | 底栏兼容表面 |
-| --- | --- | --- |
-| 关闭 | 实色、`Material.empty` | 实色 |
-| 轻柔 | `REGULAR`，无阴影/交互形变/触摸光感 | 模糊8，无投影、无触点流光 |
-| 标准 | `REGULAR`、系统阴影、触摸光感 | 模糊12，无投影、触点流光 |
-| 丰富 | `THIN`、系统阴影、形变及触摸光感 | 模糊16，无投影、触点流光 |
+| 等级 | 通用系统材质配置 | 原生底栏配置 | 兼容表面 |
+| --- | --- | --- | --- |
+| 关闭 | 实色、`Material.empty` | 实色、`Material.empty` | 实色 |
+| 轻柔 | `REGULAR`，无交互形变，`lightEffect: null` | `THIN`，无交互形变，`lightEffect: null` | 背景模糊 radius 12、主题染色，无触点流光 |
+| 标准 | `REGULAR`，无交互形变，`lightEffect: {}` | `THIN`，无交互形变，`lightEffect: {}` | 背景模糊 radius 10、主题染色和触点流光 |
+| 丰富 | `THIN`，交互形变，`lightEffect: {}` | `ULTRA_THIN`，交互形变，`lightEffect: {}` | 背景模糊 radius 8、主题染色和触点流光 |
 
-高对比覆盖材质选择。减少动态关闭控件形变及页签切换动画，并让主导航静态展开；标准/丰富等级保留直接随触点移动的高光，不加入自主循环动画，不宣称停止帖子 GIF。底栏在真机与模拟器上均保留可见染色、背景模糊与跟手高光，其他控件仍按原有能力回退。设备本身的 `getGlobalMaterialLevel()` 不可修改，本应用不会改变它。
+启用的原生沉浸材质均设置 `applyShadow: false`。高对比覆盖材质选择，使用实色和清晰边框。减少动态关闭交互形变及页签自动过渡，并让主导航保持展开；标准/丰富等级仍保留直接随触点移动的高光，不加入自主循环动画，不宣称停止帖子 GIF。2026年10月20日的 Pura X View 与 CodexPhone 验证观察到栏内触点提亮，真机减少动态开启时高光仍能从“话题”移动到“分类”“搜索”，释放后恢复；具体配置和验收边界见[验证记录](docs/acceptance.md)。本应用不修改系统材质等级。
 
 启动时先获取主窗口并等待 `setWindowLayoutFullScreen(true)` 完成，再加载页面；任一步失败仍按默认布局继续加载，窗口布局失败只记录安全错误码。Index 通过 `@Env(SystemProperties.WINDOW_AVOID_AREA)` 获取以 vp 表示的动态避让信息：顶部取状态栏与挖孔高度的最大值，底部取手势指示条、系统栏与挖孔高度的最大值，不相加，也不把键盘高度计入系统栏避让。
 
-Root / Navigation 负责扩展系统区，子 List / Refresh 不重复叠加 `ignoreLayoutSafeArea`。首页固定顶部承担 topInset，列表从0开始；分类仍使用负 topInset 的原生列表起点。消息列表保留独立滚动位置并为浮动底栏预留末端空间。状态区 EdgeBackdrop 使用只读的高斯背景模糊与主题渐隐：轻柔、标准、丰富的 radius 分别为3、5、7，以局部原生 alpha 蒙版一起渐隐到透明；关闭时取消模糊，高对比时使用实色；该层不响应触摸或交互光晕。Root 使用100%高度，普通页面采用 UIContext 的 `RESIZE`，键盘可见时隐藏主导航。半模态编辑器期间暂用 `OFFSET`，由 Sheet 自身的 `RESIZE_ONLY` 压缩输入内容；真正退场后恢复 `RESIZE`。
+Root / Navigation 负责扩展系统区，子 List / Refresh 不重复叠加 `ignoreLayoutSafeArea`。首页列表从固定顶栏后方滚动，`contentStartOffset` 使用 `topInset + 实测顶栏高度`，回到顶部的判断也计入同一偏移；帖子列表使用 `topInset + 56vp`。消息列表保留独立滚动位置并为浮动底栏预留末端空间。状态区 `EdgeBackdrop` 使用普通背景模糊和由主题色到透明的渐变染色，轻柔、标准、丰富的 radius 分别为12、10、8，不使用 `OFFSCREEN` 混合遮罩；关闭效果或高对比时使用实色，该层不响应触摸或交互光晕。Root 使用100%高度，普通页面采用 UIContext 的 `RESIZE`，键盘可见时隐藏主导航。半模态编辑器期间暂用 `OFFSET`，由 Sheet 自身的 `RESIZE_ONLY` 压缩输入内容；真正退场后恢复 `RESIZE`。
 
 [华为设计规范](https://developer.huawei.com/consumer/cn/design/) · [HarmonyOS 7 / API 26 升级指导](https://developer.huawei.com/consumer/en/doc/harmonyos-releases/upgrade-adaptation) · [官方沉浸光感方案](https://developer.huawei.com/consumer/cn/doc/guidebook/solution-0000002784570841)
 
-本轮还对照[沉浸光感最佳实践](https://developer.huawei.com/consumer/cn/doc/best-practices/bpta-spatiality-immersive)、[页签点击响应 FAQ](https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-performance-20)及[IT之家鸿蒙版9.0官方介绍](https://www.ithome.com/1/003/407.htm)中的悬浮底栏与工具栏跟手展示。参考交互和层次，不复制素材，也不把兼容玻璃绘制称为已完整实测的原生光学效果。
+实现依据[沉浸光感开启说明](https://developer.huawei.com/consumer/cn/doc/HarmonyOS-Guides/arkts-immersive-light-sense-enable)、[沉浸光感最佳实践](https://developer.huawei.com/consumer/cn/doc/best-practices/bpta-spatiality-immersive)和[页签点击响应 FAQ](https://developer.huawei.com/consumer/cn/doc/doccenter-dev-faq/faqs-performance-20)。设计参考[IT之家鸿蒙版9.0官方介绍](https://www.ithome.com/1/003/407.htm)，并在上述真机上对照9.01主页尺寸与文章栏按压反馈；参考交互与层次，不复制素材。
 
 ## 登录与数据边界
 
@@ -113,10 +119,15 @@ Root / Navigation 负责扩展系统区，子 List / Refresh 不重复叠加 `ig
 - 原生请求禁止自动重定向。公共外域图片不带论坛 Cookie / CSRF。
 - 网页认证精确允许当前站点展示的身份提供方，显示真实 origin。GitHub 跳转已在模拟器确认到 `github.com` 的真实登录页。
 - 认证弹窗使用独立 controller / 原生面板，保留 POST、window.name 与 opener，子窗口不注册原生桥。
-- 用户完成验证后才启用同源浏览器传输；不自动解验证码，也不自动重放写请求。
+- 用户完成网页验证，或同源只读 CSRF 探测获得有效 JSON 回执后，才启用浏览器传输。遇盾的读取请求共用一次限时恢复，最多重试一次；不自动解验证码，不自动重放写请求。
+- 登录、论坛会话及过盾 Cookie 从原生响应更新时及时请求 ArkWeb 落盘，恢复成功也请求落盘；不另存或回灌旧过盾凭据。切后台、换账号、打开手动登录页会取消自动恢复，仍需人机交互时保留网页验证入口。
 - 换账号立即取消旧请求、清显示数据和缓存；图片按账号、会话代数及进程隔离。
 - 缺失编辑/删除/回复权限按不允许处理，提交前再次向服务器核实。写请求超时提示结果未确认，避免自动重复提交。
 - 静态声明 `INTERNET` 和用于前台握姿感知的 `DETECT_GESTURE`，后者为普通级 `system_grant` 权限，不额外弹出动态授权；选文件走系统选择器，图片保存通过安全控件临时授权。
+
+“我的 → 关于与连接诊断 → 检测连接能力”可以对比系统 DNS、加密 DNS 及 Cloudflare 对照站点下的原生请求与 ArkWeb 连接。探测不发送论坛凭据，网页使用独立隐私模式，仅显示服务端的 TLS / SNI 结果；退出或完成后撤销临时 ArkWeb DoH 配置。该入口用于验证能力，当前未开启应用全链路的 DoH + ECH 免代理直连；DoH 可用不等于 ECH 生效。
+
+2026-10-18 的独立原型已在关闭 VPN/代理的真机 Wi-Fi 下确认 Rustls 与 ArkWeb 的 ECH 回执，跑通现有登录会话的首页、帖子读取及进程重启自动恢复。10月19日补齐论坛与已验证 CDN 的浏览器图片读取，真机成功解码且用户确认恢复；上传、长期过盾及完整接入仍待验收，见 [ECH 方案验证](docs/ech-feasibility.md)。实验源码与复现步骤在 [experiments/ech-probe](experiments/ech-probe/README.md)，不作为当前普通调试版已支持全功能直连的声明。
 
 ## 工程与构建
 

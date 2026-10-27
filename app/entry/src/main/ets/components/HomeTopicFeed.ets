@@ -2,6 +2,7 @@ import { uiMaterial } from '@kit.ArkUI';
 import { TopicFeedFilterOption, topicFeedFilters } from '../models/ForumModels';
 import { AppearanceSettings } from '../models/AppearanceSettings';
 import { TopicFeed } from './TopicFeed';
+import { readerBackdropFor } from '../services/MaterialPolicy';
 
 @ObservedV2
 class HomeFeedPage {
@@ -30,10 +31,20 @@ export struct HomeTopicFeed {
   @Local filterIndex: number = 0;
   @Local targetIndex: number = 0;
   @Local mounted: boolean = false;
+  @Local headerHeight: number = 98;
   @Local pages: HomeFeedPage[] = topicFeedFilters.map((_filter: TopicFeedFilterOption, index: number): HomeFeedPage =>
     new HomeFeedPage(index));
   private swiperController: SwiperController = new SwiperController();
   private consumedRefreshTopSignal: number = 0;
+
+  @Computed
+  get contentTopInset(): number { return this.topInset + this.headerHeight; }
+
+  private measureHeader(height: number): void {
+    if (Number.isFinite(height) && height > 0 && Math.abs(height - this.headerHeight) > 0.5) {
+      this.headerHeight = height;
+    }
+  }
 
   private validIndex(index: number): boolean {
     return Number.isInteger(index) && index >= 0 && index < this.pages.length;
@@ -76,7 +87,7 @@ export struct HomeTopicFeed {
 
   private readPageScroll(page: HomeFeedPage, offset: number, state: ScrollState, source: ScrollSource): void {
     if (!this.active || !this.mounted || page.index !== this.filterIndex) { return; }
-    this.onReadScroll(offset, state, source, page.scroller.currentOffset().yOffset <= 1);
+    this.onReadScroll(offset, state, source, page.scroller.currentOffset().yOffset + this.contentTopInset <= 1);
   }
 
   @LocalBuilder
@@ -122,18 +133,18 @@ export struct HomeTopicFeed {
           .onClick(() => { this.onNewTopic(); })
       }.padding({ top: 4, bottom: 2 }).width('100%')
       this.filterButtons()
-    }.width('100%').padding({ left: 14, right: 14 }).backgroundColor($r('app.color.surface'))
+    }.width('100%').padding({ left: 14, right: 14 }).backgroundColor(Color.Transparent)
+      .onAreaChange((_old: Area, next: Area): void => { this.measureHeader(Number(next.height)); })
   }
 
   build() {
-    Column() {
-      this.homeHeader()
+    Stack({ alignContent: Alignment.TopStart }) {
       Swiper(this.swiperController) {
         ForEach(this.pages, (page: HomeFeedPage) => {
           TopicFeed({ filterIndex: page.index, active: this.mounted && this.active && this.filterIndex === page.index,
             prefetch: this.shouldPrefetch(page.index), appearance: this.appearance,
             reloadSignal: this.reloadSignal, refreshTopSignal: page.refreshSignal,
-            listScroller: page.scroller, bottomInset: this.bottomInset,
+            listScroller: page.scroller, topInset: this.contentTopInset, bottomInset: this.bottomInset, immersiveTop: true,
             onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
               this.readPageScroll(page, offset, state, source);
             },
@@ -145,8 +156,13 @@ export struct HomeTopicFeed {
         .onChange((index: number): void => { this.pageChanged(index); })
         .onAnimationStart((_index: number, targetIndex: number): void => { this.animationStarted(targetIndex); })
         .onAnimationEnd((index: number): void => { this.animationEnded(index); })
-        .width('100%').layoutWeight(1).id('home_feed_pager')
-    }.width('100%').height('100%').padding({ top: this.topInset }).backgroundColor($r('app.color.surface'))
+        .width('100%').height('100%').id('home_feed_pager')
+      Column() { this.homeHeader() }
+        .width('100%').padding({ top: this.topInset }).zIndex(1)
+        .backgroundColor(this.appearance.effectLevel === 0 || this.appearance.highContrast ?
+          $r('app.color.surface') : $r('app.color.reading_glass_tint'))
+        .backgroundEffect(readerBackdropFor(this.appearance))
+    }.width('100%').height('100%').backgroundColor($r('app.color.surface'))
       .onAppear(() => { this.mounted = true; this.refreshCurrentFromTop(); })
       .onDisAppear(() => { this.mounted = false; })
   }

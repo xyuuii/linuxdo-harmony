@@ -1,4 +1,7 @@
 import { common } from '@kit.AbilityKit';
+import { AnimatedDrawableDescriptor, DrawableDescriptorLoadedResult } from '@kit.ArkUI';
+import { image } from '@kit.ImageKit';
+import { fileUri } from '@kit.CoreFileKit';
 import { ForumSession, forumSession } from '../models/ForumSession';
 import { forumApi, RequestCancellation, ForumApiError, ForumErrorKind } from '../services/ForumApi';
 import { loadForumMedia, invalidateForumMedia } from '../services/ForumMedia';
@@ -21,6 +24,7 @@ export struct NativeForumImage {
   @Event onNaturalSize: (width: number, height: number) => void = (_width: number, _height: number): void => {};
   @Local sessionRef: ForumSession = forumSession;
   @Local cachedUri: string = '';
+  @Local animatedSource: AnimatedDrawableDescriptor | undefined = undefined;
   @Local loading: boolean = false;
   @Local failed: boolean = false;
   private request: RequestCancellation | undefined = undefined;
@@ -49,6 +53,7 @@ export struct NativeForumImage {
     this.request?.cancel();
     this.request = undefined;
     this.cachedUri = '';
+    this.animatedSource = undefined;
     this.imageGeneration = -1;
     this.imageRevision = -1;
     this.loading = false;
@@ -72,17 +77,38 @@ export struct NativeForumImage {
     const url: string = this.url;
     try {
       const uri: string = await loadForumMedia(url, context, cancellation);
-      if (this.live && this.request === cancellation && this.url === url && this.ownerId === owner &&
+      const animation: AnimatedDrawableDescriptor | undefined = await this.animationSource(uri, url, cancellation);
+      const dimensions: DrawableDescriptorLoadedResult | undefined = animation ? await animation.load() : undefined;
+      if (this.live && !cancellation.isCancelled && this.request === cancellation && this.url === url && this.ownerId === owner &&
         (this.sessionRef.user?.id || 0) === owner && forumApi.getSessionGeneration() === generation) {
         this.imageGeneration = generation;
         this.imageRevision = this.sessionRef.revision;
+        this.animatedSource = animation;
         this.cachedUri = uri;
+        if (dimensions) {
+          this.naturalSize(dimensions.imageWidth, dimensions.imageHeight,
+            { uri, source: url, ownerId: owner, generation, revision: this.imageRevision });
+        }
       }
     } catch (error) {
       if (this.live && this.request === cancellation) {
         this.failed = !(error instanceof ForumApiError && error.kind === ForumErrorKind.Cancelled);
       }
     } finally { if (this.request === cancellation) { this.loading = false; } }
+  }
+  private async animationSource(uri: string, url: string,
+    cancellation: RequestCancellation): Promise<AnimatedDrawableDescriptor | undefined> {
+    if (cancellation.isCancelled || !/\.(gif|webp)(?:[?#]|$)/i.test(url)) { return undefined; }
+    let source: image.ImageSource | undefined = undefined;
+    try {
+      source = image.createImageSource(new fileUri.FileUri(uri).path);
+      const frames: number = await source.getFrameCount();
+      if (!cancellation.isCancelled && frames > 1) {
+        return new AnimatedDrawableDescriptor(uri, { autoPlay: true, iterations: -1 });
+      }
+    } catch { /* Keep the ordinary image path when animation metadata is unavailable. */ }
+    finally { if (source) { try { await source.release(); } catch { /* Source is no longer used. */ } } }
+    return undefined;
   }
   private matchesDecodedImage(identity: LoadedImageIdentity): boolean {
     return this.live && this.cachedUri === identity.uri && this.url === identity.source &&
@@ -98,19 +124,42 @@ export struct NativeForumImage {
   private decodeFailed(identity: LoadedImageIdentity): void {
     if (!this.matchesDecodedImage(identity)) { return; }
     this.cachedUri = '';
+    this.animatedSource = undefined;
     this.failed = true;
     if (this.context) { void invalidateForumMedia(identity.source, this.context); }
+  }
+  private animationVisibility(visible: boolean, ratio: number, identity: LoadedImageIdentity): void {
+    if (!this.matchesDecodedImage(identity)) { return; }
+    const controller = this.animatedSource?.getAnimationController();
+    if (!controller) { return; }
+    const status: AnimationStatus = controller.getStatus();
+    if (!visible || ratio <= 0) {
+      if (status === AnimationStatus.Running) { controller.pause(); }
+    } else if (status === AnimationStatus.Paused) {
+      controller.resume();
+    } else if (status !== AnimationStatus.Running) {
+      controller.start();
+    }
   }
 
   @Builder
   private decodedImage(identity: LoadedImageIdentity) {
-    Image(identity.uri)
-      .width('100%')
-      .height('100%')
-      .objectFit(this.fit)
-      .accessibilityText(this.accessibleLabel)
-      .onComplete((event): void => this.naturalSize(event?.width || 0, event?.height || 0, identity))
-      .onError((): void => this.decodeFailed(identity))
+    if (this.animatedSource) {
+      Image(this.animatedSource)
+        .width('100%')
+        .height('100%')
+        .objectFit(this.fit)
+        .accessibilityText(this.accessibleLabel)
+        .onVisibleAreaChange([0.01], (visible: boolean, ratio: number): void => this.animationVisibility(visible, ratio, identity))
+    } else {
+      Image(identity.uri)
+        .width('100%')
+        .height('100%')
+        .objectFit(this.fit)
+        .accessibilityText(this.accessibleLabel)
+        .onComplete((event): void => this.naturalSize(event?.width || 0, event?.height || 0, identity))
+        .onError((): void => this.decodeFailed(identity))
+    }
   }
 
   @Builder

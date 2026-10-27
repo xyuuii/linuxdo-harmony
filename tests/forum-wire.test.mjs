@@ -291,6 +291,57 @@ test('Discourse system author with signed ID maps into the feed alongside ordina
   assert.equal(rt.wire.userFromWire({ id: -1, username: 'system' }).id, -1);
 });
 
+test('animated avatar metadata preserves the explicit GIF and WebP upload for feed and post authors', async () => {
+  const rt = runtime();
+  const template = '/user_avatar/linux.do/animated/{size}/9.png';
+  const { api } = browserApi(rt, async () => json({
+    topic_list: { topics: [{ id: 42, title: 'Animated author', posters: [{ user_id: 7 }] }] },
+    users: [{ id: 7, username: 'animated', avatar_template: template,
+      animated_avatar: '/uploads/default/original/1X/animated.gif' }]
+  }));
+  const page = await api.fetchLatest();
+  assert.equal(page.items[0].avatarUrl, 'https://linux.do/uploads/default/original/1X/animated.gif');
+  const post = rt.wire.postFromWire({ id: 71, avatar_template: template,
+    animated_avatar: '//cdn.example.test/original/animated.webp?version=2#preview' });
+  assert.equal(post.avatarUrl, 'https://cdn.example.test/original/animated.webp?version=2#preview');
+  assert.equal(post.avatarTemplate, template);
+});
+
+test('avatar uploads require valid GIF or WebP metadata and retain static or existing animated templates as fallback', () => {
+  const { models, wire } = runtime();
+  const template = '/user_avatar/linux.do/fixture/{size}/9.png?version=2#avatar';
+  const staticUrl = 'https://linux.do/user_avatar/linux.do/fixture/72/9.png?version=2#avatar';
+  for (const metadata of ['', '/uploads/static.png', '/uploads/static.png?name=animated.gif', '/uploads/animated.gif/not-an-image']) {
+    assert.equal(models.avatarUrlOf(template, 72, metadata), staticUrl);
+  }
+  assert.equal(models.avatarUrlOf(template, 72, '/uploads/ANIMATED.WEBP?version=3'),
+    'https://linux.do/uploads/ANIMATED.WEBP?version=3');
+  assert.equal(wire.userFromWire({ id: 7, username: 'fixture', avatar_template: template, animated_avatar: null }).avatarUrl,
+    'https://linux.do/user_avatar/linux.do/fixture/144/9.png?version=2#avatar');
+  assert.equal(models.avatarUrlOf('', 72, '/uploads/animated.gif'), 'https://linux.do/uploads/animated.gif');
+  const notification = wire.notificationFromWire({ id: 1,
+    acting_user_avatar_template: '//cdn.example.test/avatars/{size}/9.gif' });
+  assert.equal(notification.avatarUrl, 'https://cdn.example.test/avatars/144/9.gif');
+});
+
+test('animated avatar URL validation rejects unsafe metadata without guessing a different static avatar suffix', () => {
+  const { models } = runtime();
+  const template = '/user_avatar/linux.do/fixture/{size}/9.png';
+  for (const metadata of [
+    'http://cdn.example.test/a.gif', 'ftp://cdn.example.test/a.gif', 'javascript:fixture.gif',
+    'data:image/gif;base64,fixture', 'https://user:secret@cdn.example.test/a.gif',
+    '//user@cdn.example.test/a.webp', 'https://cdn.example.test:8443/a.gif',
+    'https:///cdn.example.test/a.gif', '///cdn.example.test/a.gif',
+    'https://cdn.example.test/a.gif\n', 'https://cdn.example.test/\u0000a.gif',
+    'https://cdn.example.test\\a.gif', 'https://cdn.example.test/static.png?name=animated.gif'
+  ]) {
+    assert.equal(models.avatarUrlOf(template, 72, metadata), 'https://linux.do/user_avatar/linux.do/fixture/72/9.png');
+  }
+  assert.equal(models.avatarUrlOf(template, 72, 'HTTPS://cdn.example.test:443/a.gif?version=2'),
+    'https://cdn.example.test:443/a.gif?version=2');
+  assert.equal(models.avatarUrlOf('javascript:fixture.png', 72, 'http://cdn.example.test/a.gif'), '');
+});
+
 test('home filters use their own Discourse routes and keep the weekly top period across pagination', async () => {
   const rt = runtime();
   const { api, requests } = browserApi(rt, async request => json({
@@ -819,6 +870,99 @@ test('shared media keeps GIF bytes and sends app cookie only to exact Linux.do H
   assert.equal(rt.nativeCalls[2].options.header.Cookie, undefined);
   assert.equal(rt.openFiles.size, 0, 'all cache file descriptors are closed');
   assert.equal(rt.destroyCount, 3, 'all HTTP media requests are released');
+});
+
+test('GIF87a, GIF89a and WebP bytes keep decoder-recognizable cache suffixes with opaque names', async () => {
+  const fixtures = [
+    { name: 'GIF87a', extension: 'gif', bytes: [71, 73, 70, 56, 55, 97, 1, 0, 1, 0, 0, 0] },
+    { name: 'GIF89a', extension: 'gif', bytes: [71, 73, 70, 56, 57, 97, 1, 0, 1, 0, 0, 0] },
+    { name: 'WebP', extension: 'webp', bytes: [82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66, 80, 86, 80, 56, 88] }
+  ];
+  for (const fixture of fixtures) {
+    const rt = runtime({ responseCode: 200, header: { 'content-type': 'application/octet-stream' },
+      result: new Uint8Array(fixture.bytes).buffer });
+    const media = rt.load('services/ForumMedia');
+    // Neither the source extension nor MIME supplies the format decision.
+    const uri = await media.loadForumMedia('https://linux.do/private-avatar/photo.png?token=fixture-sensitive-value',
+      { cacheDir: '/app-cache' });
+    const filename = uri.slice(uri.lastIndexOf('/') + 1);
+    assert.match(filename, new RegExp(`^[a-f0-9]{64}-fixture-process-[0-9]+\\.${fixture.extension}$`), fixture.name);
+    for (const secret of ['private-avatar', 'photo', 'token', 'fixture-sensitive-value']) {
+      assert.equal(filename.includes(secret), false, `${fixture.name}: ${secret}`);
+    }
+    assert.deepEqual(new Uint8Array([...rt.files.values()][0]), new Uint8Array(fixture.bytes), fixture.name);
+    assert.equal(rt.openFiles.size, 0, fixture.name);
+  }
+});
+
+test('claimed GIF URLs and MIME cannot label PNG bytes or incomplete animation signatures as animated files', async () => {
+  const fixtures = [
+    { name: 'PNG under GIF metadata', bytes: [137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13] },
+    { name: 'incomplete GIF header', bytes: [71, 73, 70, 56, 57] },
+    { name: 'incomplete RIFF WebP header', bytes: [82, 73, 70, 70, 4, 0, 0, 0, 87, 69, 66] },
+    { name: 'other RIFF content', bytes: [82, 73, 70, 70, 4, 0, 0, 0, 87, 65, 86, 69] }
+  ];
+  for (const fixture of fixtures) {
+    const rt = runtime({ responseCode: 200, header: { 'content-type': 'image/gif' },
+      result: new Uint8Array(fixture.bytes).buffer });
+    const media = rt.load('services/ForumMedia');
+    const uri = await media.loadForumMedia('https://linux.do/private/avatar.gif?original=private-name.webp',
+      { cacheDir: '/app-cache' });
+    const filename = uri.slice(uri.lastIndexOf('/') + 1);
+    assert.match(filename, /^[a-f0-9]{64}-fixture-process-[0-9]+\.image$/, fixture.name);
+    assert.equal(filename.includes('avatar'), false, fixture.name);
+    assert.equal(filename.includes('private-name'), false, fixture.name);
+    assert.deepEqual(new Uint8Array([...rt.files.values()][0]), new Uint8Array(fixture.bytes), fixture.name);
+  }
+});
+
+test('verified browser media replaces native forum/CDN image reads and preserves binary cache bytes', async () => {
+  const rt = runtime(gifResponse());
+  const media = rt.load('services/ForumMedia');
+  const api = rt.api.forumApi;
+  const browserReads = [];
+  api.registerBrowserMediaTransport(async (url, cancellation) => {
+    assert.equal(cancellation.isCancelled, false);
+    browserReads.push(url);
+    const native = gifResponse();
+    return { status: native.responseCode, headers: native.header, bytes: native.result };
+  });
+  api.setBrowserTransportEnabled(true);
+  const context = { cacheDir: '/app-cache' };
+  const forumUri = await media.loadForumMedia('https://linux.do/uploads/a.gif', context);
+  const cdnUri = await media.loadForumMedia('https://cdn3.ldstatic.com/original/a.gif', context);
+  assert.ok(forumUri.endsWith('.gif'));
+  assert.ok(cdnUri.endsWith('.gif'));
+  assert.equal(browserReads.length, 2);
+  assert.equal(rt.nativeCalls.length, 0);
+  for (const bytes of rt.files.values()) {
+    assert.deepEqual(new Uint8Array(bytes), new Uint8Array(gifResponse().result));
+  }
+  await media.loadForumMedia('https://public.example.invalid/other.gif', context);
+  assert.equal(rt.nativeCalls.length, 1, 'other external images retain the existing no-cookie path');
+  assert.equal(rt.nativeCalls[0].options.header.Cookie, undefined);
+});
+
+test('late browser image bytes cannot enter the cache after the account generation changes', async () => {
+  const rt = runtime();
+  const media = rt.load('services/ForumMedia');
+  const api = rt.api.forumApi;
+  let release, started;
+  const ready = new Promise(resolve => { started = resolve; });
+  api.registerBrowserMediaTransport(async () => {
+    started();
+    return new Promise(resolve => { release = resolve; });
+  });
+  api.setBrowserTransportEnabled(true);
+  const outcome = media.loadForumMedia('https://linux.do/private.gif', { cacheDir: '/app-cache' })
+    .then(value => ({ value }), error => ({ error }));
+  await ready;
+  api.resetSessionContext();
+  const native = gifResponse();
+  release({ status: 200, headers: native.header, bytes: native.result });
+  assert.equal((await outcome).error.kind, rt.api.ForumErrorKind.Cancelled);
+  assert.equal(rt.files.size, 0);
+  assert.equal(rt.nativeCalls.length, 0);
 });
 
 test('media cache and promise are isolated by owner and generation even when current user is still unknown', async () => {

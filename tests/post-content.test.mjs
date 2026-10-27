@@ -103,6 +103,70 @@ test('onebox site-icon at 32 pixels and emoji stay inline while the normal thumb
   assert.equal(largeSiteImage[0].kind, 'image', 'The site-icon class only uses inline rendering with known small dimensions.');
 });
 
+test('a forum emoji path keeps its inline role when imported cooked HTML lacks the emoji class', () => {
+  const blocks = rich.parsePostContent('<p>前<img src="/images/emoji/twemoji/smile.png?v=14" alt=":smile:">' +
+    '<img src="/images/emoji/twemoji/+1.png" srcset="https://cdn.example.test/retina.png 2x" alt=":+1:">后</p>' +
+    '<img src="https://linux.do.evil.test/images/emoji/smile.png" width="22" height="22">' +
+    '<img src="https://images.example.test/images/emoji/chart.png" width="22" height="22">' +
+    '<img src="/uploads/emoji-screenshot.png" width="22" height="22">');
+  const paragraph = blocks[0];
+  assert.equal(paragraph.kind, 'paragraph');
+  assert.equal(paragraph.runs.map(run => run.text).join(''), '前:smile::+1:后');
+  assert.deepEqual(paragraph.runs.filter(run => run.emojiUrl).map(run => run.emojiUrl), [
+    'https://linux.do/images/emoji/twemoji/smile.png?v=14', 'https://cdn.example.test/retina.png'
+  ]);
+  assert.equal(blocks.filter(block => block.kind === 'image').length, 3,
+    'Lookalike hosts, external paths, filenames and size alone must not become non-gallery emoji.');
+});
+
+function emojiLoader(media, session = { user: { id: 1 }, revision: 0 }) {
+  const declaration = (extract(richSource, 'export struct RichPostContent', '  build() {') + '\n}\n')
+    .replace('export struct RichPostContent', 'export class RichPostContent')
+    .replace(/^\s*@(?:Computed|Monitor\([^\n]*\))\s*\n/gm, '\n')
+    .replace(/@(Param|Event|Local) /g, '');
+  const { RichPostContent } = load(declaration, {
+    forumSession: session, RequestCancellation: cancellation.RequestCancellation,
+    parsePostContent: rich.parsePostContent, loadForumMedia: media
+  });
+  const content = new RichPostContent();
+  content.getUIContext = () => ({ getHostContext: () => ({}) });
+  content.cooked = '<p><img class="emoji" src="/uploads/first.png" alt=":first:">' +
+    '<img class="emoji" src="/uploads/second.png" alt=":second:"></p>';
+  return content;
+}
+
+test('one failed custom emoji retains its alt without preventing the next emoji from loading', async () => {
+  const calls = [];
+  const content = emojiLoader(async url => {
+    calls.push(url);
+    if (url.endsWith('/first.png')) { throw new Error('fixture network failure'); }
+    return 'file://second-emoji';
+  });
+  await content.loadEmojis();
+  assert.deepEqual(calls, ['https://linux.do/uploads/first.png', 'https://linux.do/uploads/second.png']);
+  assert.equal(content.emojiUris.has(calls[0]), false);
+  assert.equal(content.blocks[0].runs[0].text, ':first:');
+  assert.equal(content.emojiUris.get(calls[1]), 'file://second-emoji');
+  assert.equal(content.emojiRequest, undefined);
+});
+
+test('emoji failure recovery stops immediately when its consumer is cancelled or the account changes', async () => {
+  for (const reason of ['cancel', 'account']) {
+    const session = { user: { id: 1 }, revision: 0 };
+    const calls = [];
+    const content = emojiLoader(async (url, _context, request) => {
+      calls.push(url);
+      if (reason === 'cancel') { request.cancel(); }
+      else { session.user = { id: 2 }; session.revision++; }
+      throw new Error('fixture failure with obsolete consumer');
+    }, session);
+    await content.loadEmojis();
+    assert.deepEqual(calls, ['https://linux.do/uploads/first.png']);
+    assert.equal(content.emojiUris.size, 0);
+    assert.equal(content.emojiRequest, undefined);
+  }
+});
+
 test('executable markup and unsafe links are omitted, including an unterminated script', () => {
   const blocks = rich.parsePostContent('<p>visible</p><script>alert(1)</script><style>bad</style>' +
     '<img src="javascript:evil" alt="safe"><a href="file:///tmp/a">safe</a>' +
@@ -175,7 +239,7 @@ test('first-post navigation keeps the header and resets a retained-root tail sli
     ...load(source('services/TopicScrollPolicy')),
     loadAppearanceSettings: () => ({}),
     RequestCancellation: cancellation.RequestCancellation,
-    forumApi: { async fetchTopic(id, number) {
+    forumApi: { getSessionGeneration: () => 0, emojiUrls: async () => new Map(), async fetchTopic(id, number) {
       topicReads.push({ id, number });
       return { postStream: { posts, stream: [1, 2, 3] } };
     } },

@@ -14,6 +14,8 @@ import { handednessState } from '../services/HandednessState';
 import { TopicFeed } from '../components/TopicFeed';
 import { HomeTopicFeed } from '../components/HomeTopicFeed';
 import { AdaptiveNavigationBar } from '../components/AdaptiveNavigationBar';
+import { navigationBarHeight } from '../services/NavigationMorphGeometry';
+import { MaterialBarHost } from '../components/MaterialBarHost';
 import { EdgeBackdrop } from '../components/EdgeBackdrop';
 import { topWindowInset, bottomWindowInset } from '../services/WindowEdgeInsets';
 import { CategoriesPage } from './CategoriesPage';
@@ -26,6 +28,7 @@ import { TopicPage } from './TopicPage';
 import { ComposerPage } from './ComposerPage';
 import { LoginPage } from './LoginPage';
 import { AboutPage } from './AboutPage';
+import { ConnectionProbePage } from './ConnectionProbePage';
 
 @ObservedV2
 class ForumRoute {
@@ -306,6 +309,7 @@ struct Index {
 
   private openBrowser(): void {
     if (!this.webAttached) { this.getUIContext().getPromptAction().showToast({ message: '网页登录正在准备，请稍后重试' }); return; }
+    forumApi.cancelSessionRecovery();
     this.resetNavigation();
     forumApi.setBrowserTransportEnabled(false);
     forumSession.stopPolling();
@@ -400,7 +404,8 @@ struct Index {
   onPageShow(): void { forumSession.startPolling(); }
   onPageHide(): void { forumSession.stopPolling(); }
   aboutToDisappear(): void {
-    forumSession.dispose(); forumApi.setBrowserTransportEnabled(false); forumApi.dispose(); this.browserAdapter.dispose();
+    forumSession.dispose(); forumApi.registerBrowserRecovery(undefined);
+    forumApi.setBrowserTransportEnabled(false); forumApi.dispose(); this.browserAdapter.dispose();
   }
 
   @Builder
@@ -437,8 +442,28 @@ struct Index {
     } else if (name === 'login') {
       LoginPage({ topInset: this.topInset, bottomInset: this.bottomInset, onAuthenticated: (): void => { this.authenticated(); }, onBrowser: (): void => { this.openBrowser(); } })
     } else if (name === 'about') {
-      AboutPage({ topInset: this.topInset, bottomInset: this.bottomInset, onVerify: (): void => { this.openBrowser(); } })
+      AboutPage({ topInset: this.topInset, bottomInset: this.bottomInset, onVerify: (): void => { this.openBrowser(); },
+        onConnectionProbe: (): void => { this.pushRoute('connection-probe', new ForumRoute()); } })
+    } else if (name === 'connection-probe') {
+      ConnectionProbePage({ topInset: this.topInset, bottomInset: this.bottomInset })
     }
+  }
+
+  @LocalBuilder
+  mainNavigationBar() {
+    AdaptiveNavigationBar({ currentIndex: this.currentIndex, collapsed: this.navigationCollapsed,
+      unreadCount: forumSession.unread,
+      sideLeft: handednessState.sideLeft,
+      appearance: this.appearance,
+      bottomInset: this.bottomInset,
+      onSelect: (index: number): void => {
+        this.resetNavigation(); this.currentIndex = index; this.controller.changeIndex(index);
+      },
+      onLatestDoubleTap: (): void => {
+        this.resetNavigation();
+        this.latestRefreshSignal++;
+      },
+      onExpand: (): void => { this.resetNavigation(); } })
   }
 
   build() {
@@ -536,19 +561,7 @@ struct Index {
         .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP])
         .hitTestBehavior(HitTestMode.None).accessibilityLevel('no-hide-descendants').zIndex(1)
 
-      AdaptiveNavigationBar({ currentIndex: this.currentIndex, collapsed: this.navigationCollapsed,
-        unreadCount: forumSession.unread,
-        sideLeft: handednessState.sideLeft,
-        appearance: this.appearance,
-        bottomInset: this.bottomInset,
-        onSelect: (index: number): void => {
-          this.resetNavigation(); this.currentIndex = index; this.controller.changeIndex(index);
-        },
-        onLatestDoubleTap: (): void => {
-          this.resetNavigation();
-          this.latestRefreshSignal++;
-        },
-        onExpand: (): void => { this.resetNavigation(); } })
+      MaterialBarHost({ barHeight: navigationBarHeight + this.bottomInset, barContent: this.mainNavigationBar })
         .visibility(this.mainPageVisible && !this.showBrowser && !this.keyboardVisible ? Visibility.Visible : Visibility.Hidden)
         .height('100%')
         .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
@@ -563,7 +576,8 @@ struct Index {
             Text(this.browserOrigin).fontSize(12).fontColor($r('app.color.text_secondary'))
           }.layoutWeight(1).alignItems(HorizontalAlign.Start)
         }.width('100%').padding({ left: 10, right: 16 })
-        Web({ src: 'about:blank', controller: this.webController }).width('100%').layoutWeight(1)
+        // Let the controller own navigation; a delayed initial src load can cancel session recovery.
+        Web({ src: '', controller: this.webController }).width('100%').layoutWeight(1)
           .javaScriptAccess(true).domStorageAccess(true).fileAccess(false).mixedMode(MixedMode.None)
           .multiWindowAccess(this.showBrowser).allowWindowOpenMethod(this.showBrowser)
           .onWindowNew((event: OnWindowNewEvent) => { this.createAuthPopup(event); })
@@ -574,14 +588,29 @@ struct Index {
             forumApi.setUserAgent(webview.WebviewController.getDefaultUserAgent());
             forumApi.registerBrowserTransport((request: BrowserRequest, cancellation?: RequestCancellation): Promise<BrowserResponse> =>
               this.browserAdapter.request(request, cancellation));
+            forumApi.registerBrowserMediaTransport((url: string, cancellation: RequestCancellation) =>
+              this.browserAdapter.requestImage(url, cancellation));
+            forumApi.registerBrowserRecovery(async (cancellation: RequestCancellation): Promise<boolean> => {
+              if (!this.webAttached || this.showBrowser || this.showAuthPopup ||
+                this.paths.getAllPathName().slice(-1)[0] === 'connection-probe') { return false; }
+              return this.browserAdapter.recoverSession(cancellation);
+            });
           })
           .onPageBegin((event: OnPageBeginEvent) => {
+            this.browserAdapter.pageStarted();
             const origin: string = loginOrigin(event.url);
             if (origin) { this.browserOrigin = origin; this.browserTitle = loginPageTitle(event.url); }
+          })
+          .onNavigationEntryCommitted((event: LoadCommittedDetails) => {
+            if (event.isMainFrame && !event.isSameDocument) { this.browserAdapter.pageCommitted(); }
+          })
+          .onErrorReceive((event: OnErrorReceiveEvent) => {
+            if (event.request.isMainFrame()) { this.browserAdapter.pageFailed(event.error.getErrorCode()); }
           })
           .onLoadIntercept((event: OnLoadInterceptEvent) => {
             if (!event.data.isMainFrame()) { return false; }
             const url: string = event.data.getRequestUrl();
+            if (!this.showBrowser && !/^https:\/\/linux\.do(?::443)?(?:[/?#]|$)/.test(url)) { return true; }
             const allowed: boolean = allowedLoginNavigation(url, true);
             if (!allowed) { this.browserError = '此认证地址暂不支持在应用中打开。'; }
             return !allowed;

@@ -1,7 +1,7 @@
 import { curves, uiMaterial } from '@kit.ArkUI';
 import { AppearanceSettings, loadAppearanceSettings } from '../models/AppearanceSettings';
 import { ReaderGlassSurface } from './ReaderGlassSurface';
-import { navigationMorphFrame, NavigationMorphFrame } from '../services/NavigationMorphGeometry';
+import { navigationMorphFrame, NavigationMorphFrame, navigationIconSize } from '../services/NavigationMorphGeometry';
 
 interface NavigationEntry { index: number; title: string; symbol: Resource; }
 
@@ -116,20 +116,13 @@ export struct AdaptiveNavigationBar {
   private tab(entry: NavigationEntry) {
     Button({ type: ButtonType.Normal, buttonStyle: ButtonStyleMode.TEXTUAL }) {
       Stack({ alignContent: Alignment.TopStart }) {
-        if (entry.index === this.selectedIndex) {
-          Blank().width(this.frame(entry.index).buttonWidth - 8).height(this.frame(entry.index).surfaceHeight - 8)
-            .backgroundColor(this.appearance.highContrast || this.appearance.effectLevel === 0 ?
-              $r('app.color.selected_background') : $r('app.color.reading_glass_selection'))
-            .borderRadius(this.frame(entry.index).surfaceHeight / 2)
-            .position({ x: 4, y: 4 }).opacity(this.frame(entry.index).labelOpacity)
-        }
-        SymbolGlyph(entry.symbol).fontSize(23)
+        SymbolGlyph(entry.symbol).fontSize(navigationIconSize)
           .fontColor([entry.index === this.selectedIndex ? $r('app.color.accent') : $r('app.color.text_secondary')])
-          .position({ x: (this.frame(entry.index).buttonWidth - 23) / 2, y: this.frame(entry.index).iconTop })
-        Text(entry.title).fontSize(12).fontWeight(entry.index === this.selectedIndex ? FontWeight.Medium : FontWeight.Normal)
+          .position({ x: (this.frame(entry.index).buttonWidth - navigationIconSize) / 2, y: this.frame(entry.index).iconTop })
+        Text(entry.title).fontSize(11).fontWeight(entry.index === this.selectedIndex ? FontWeight.Medium : FontWeight.Normal)
           .fontColor(entry.index === this.selectedIndex ? $r('app.color.accent') : $r('app.color.text_secondary'))
-          .width(this.frame(entry.index).buttonWidth).height(18).textAlign(TextAlign.Center)
-          .position({ x: 0, y: 32 }).opacity(this.frame(entry.index).labelOpacity)
+          .width(this.frame(entry.index).buttonWidth).height(16).textAlign(TextAlign.Center)
+          .position({ x: 0, y: 29 }).opacity(this.frame(entry.index).labelOpacity)
         if (entry.index === 3 && this.safeUnreadCount > 0) {
           Text(this.safeUnreadCount > 99 ? '99+' : String(this.safeUnreadCount))
             .fontSize(10).fontWeight(FontWeight.Medium).fontColor(Color.White)
@@ -169,15 +162,15 @@ export struct AdaptiveNavigationBar {
   build() {
     Column() {
       Stack({ alignContent: Alignment.TopStart }) {
-        ReaderGlassSurface({ appearance: this.appearance, content: this.navigationButtons,
+        ReaderGlassSurface({ appearance: this.appearance, content: this.navigationButtons, nativeBar: true,
           radiusVp: this.frame().surfaceHeight / 2, lightId: 'main_navigation_touch_light' })
           .width(this.frame().surfaceWidth).height(this.frame().surfaceHeight).id('main_navigation_surface')
           .position({ x: this.frame().surfaceLeft + this.handOffset, y: 0 })
-      }.width('100%').height(this.frame().surfaceHeight + 12 + this.safeBottomInset)
-        .padding({ left: 16, right: 16, bottom: 12 + this.safeBottomInset })
+      }.width('100%').height(this.frame().surfaceHeight + this.safeBottomInset)
+        .padding({ left: 16, right: 16, bottom: this.safeBottomInset })
         .onAreaChange((_previous: Area, current: Area): void => {
           const width: number = Number(current.width) - 32;
-          if (Number.isFinite(width) && width >= 52 && Math.abs(this.availableWidth - width) > 0.5) {
+          if (Number.isFinite(width) && width >= 48 && Math.abs(this.availableWidth - width) > 0.5) {
             this.availableWidth = width;
           }
         })

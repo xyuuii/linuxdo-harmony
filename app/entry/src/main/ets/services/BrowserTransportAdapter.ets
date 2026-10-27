@@ -1,8 +1,11 @@
 import { webview } from '@kit.ArkWeb';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import {
-  BrowserRequest, BrowserResponse, RequestCancellation, ForumApiError, ForumErrorKind
+  BrowserRequest, BrowserResponse, BrowserMediaResponse, RequestCancellation, ForumApiError, ForumErrorKind,
+  READ_SESSION_RECOVERY_TIMEOUT_MS
 } from './ForumApi';
+import { BrowserMediaTransfer } from './BrowserMediaTransfer';
+import { browserMediaUrl, MAX_BROWSER_MEDIA_BYTES, BROWSER_MEDIA_CHUNK_BYTES } from './BrowserMediaPolicy';
 
 const FORUM_ORIGIN: string = 'https://linux.do';
 const REQUEST_TIMEOUT_MS: number = 25000;
@@ -24,6 +27,7 @@ interface BridgeResult {
   headers?: BridgeHeaders;
   error?: string;
 }
+interface CsrfProbe { csrf?: string; }
 
 interface PendingRequest {
   request: BrowserRequest;
@@ -31,6 +35,14 @@ interface PendingRequest {
   reject: (reason: ForumApiError) => void;
   timer: number;
   cancellation?: RequestCancellation;
+  cancelHandler: () => void;
+}
+interface PendingMediaRequest {
+  transfer: BrowserMediaTransfer;
+  resolve: (response: BrowserMediaResponse) => void;
+  reject: (reason: ForumApiError) => void;
+  timer: number;
+  cancellation: RequestCancellation;
   cancelHandler: () => void;
 }
 
@@ -81,7 +93,7 @@ function jsonLiteral(value: string | BrowserRequest): string {
 }
 
 /**
- * ArkWeb transport for a page the user has explicitly finished verifying.
+ * ArkWeb transport enabled after explicit verification or a successful read-only CSRF probe.
  * Registration alone never enables it; ForumApi owns that decision.
  * No native request, file, navigation, or cookie operation is exposed to the page.
  */
@@ -92,7 +104,12 @@ export class BrowserTransportAdapter {
   readonly bridge: BrowserResponseBridge;
   private controller: webview.WebviewController;
   private pending: Map<string, PendingRequest> = new Map<string, PendingRequest>();
+  private mediaPending: Map<string, PendingMediaRequest> = new Map<string, PendingMediaRequest>();
   private disposed: boolean = false;
+  private documentRevision: number = 0;
+  private navigationRevision: number = 0;
+  private navigationCommitted: boolean = false;
+  private navigationReset: boolean = false;
 
   constructor(controller: webview.WebviewController) {
     this.controller = controller;
@@ -109,6 +126,124 @@ export class BrowserTransportAdapter {
     }
   }
 
+  pageStarted(): void {
+    // ArkWeb can deliver PageBegin after the corresponding commit notification.
+    // Only an explicit load resets commit state; the revision invalidates in-flight probes.
+    this.navigationRevision++;
+    this.pending.forEach((entry: PendingRequest, id: string): void => {
+      if (entry.request.method === 'GET') { this.fail(id, this.transportError(entry.request, false), false); }
+    });
+    this.mediaPending.forEach((_entry: PendingMediaRequest, id: string): void => this.failMedia(id, cancelledError(), true));
+  }
+  pageCommitted(): void { this.documentRevision++; this.navigationCommitted = true; }
+  pageFailed(code: number): void {
+    // ArkWeb's ERR_CONNECTION_RESET can leave an error document under the requested URL.
+    if (code === -101) { this.navigationReset = true; }
+  }
+
+  private async canProbeDocument(): Promise<boolean> {
+    try {
+      const result: string = await this.controller.runJavaScript(`(() =>
+        location.origin === '${FORUM_ORIGIN}' && window === window.top &&
+        (document.readyState === 'interactive' || document.readyState === 'complete') &&
+        !!window.${this.bridgeName} && typeof window.${this.bridgeName}.receive === 'function')();`);
+      return result === 'true';
+    } catch { return false; }
+  }
+
+  private async recoveryPause(cancellation: RequestCancellation): Promise<void> {
+    let timer: number = 0;
+    let handler: () => void = (): void => {};
+    try {
+      await new Promise<void>((resolve: () => void): void => {
+        handler = (): void => { clearTimeout(timer); resolve(); };
+        timer = setTimeout(resolve, 250);
+        cancellation.onCancel(handler);
+      });
+    } finally { clearTimeout(timer); cancellation.offCancel(handler); }
+  }
+
+  /** A successful same-origin JSON/CSRF response, not a title or cookie, proves readiness. */
+  async recoverSession(cancellation: RequestCancellation): Promise<boolean> {
+    const deadline: number = Date.now() + READ_SESSION_RECOVERY_TIMEOUT_MS;
+    const drainDeadline: number = Math.min(deadline, Date.now() + 3000);
+    // Navigating would destroy pending fetches, including possibly committed writes.
+    while (this.pending.size + this.mediaPending.size > 0 && !cancellation.isCancelled && Date.now() < drainDeadline) {
+      await this.recoveryPause(cancellation);
+    }
+    if (this.disposed || cancellation.isCancelled || this.pending.size + this.mediaPending.size > 0) { return false; }
+    const previousDocument: number = this.documentRevision;
+    this.navigationCommitted = false;
+    this.navigationReset = false;
+    try { this.controller.loadUrl(FORUM_ORIGIN + '/'); } catch { return false; }
+    let probes: number = 0;
+    let retriedNavigation: boolean = false;
+    let nextProbeAt: number = 0;
+    while (probes < 3 && !this.disposed && !cancellation.isCancelled && Date.now() < deadline) {
+      await this.recoveryPause(cancellation);
+      if (this.disposed || cancellation.isCancelled || Date.now() >= deadline) { return false; }
+      if (this.navigationReset) {
+        if (retriedNavigation || this.pending.size + this.mediaPending.size > 0) { return false; }
+        retriedNavigation = true;
+        this.navigationReset = false;
+        this.navigationCommitted = false;
+        try { this.controller.loadUrl(FORUM_ORIGIN + '/'); } catch { return false; }
+        continue;
+      }
+      if (cancellation.isCancelled || !this.isTrustedPage() || !this.navigationCommitted ||
+        this.documentRevision <= previousDocument || Date.now() < nextProbeAt) { continue; }
+      // A controller URL or a completed load can also describe a browser error page.
+      // Require the newly committed document and its bridge, even after a page-end event.
+      const document: number = this.documentRevision;
+      const navigation: number = this.navigationRevision;
+      if (!await this.canProbeDocument()) { continue; }
+      if (this.disposed || cancellation.isCancelled || !this.isTrustedPage()) { return false; }
+      if (!this.navigationCommitted || document !== this.documentRevision || navigation !== this.navigationRevision) { continue; }
+      if (Date.now() >= deadline) { return false; }
+      let response: BrowserResponse;
+      probes++;
+      try { response = await this.probeSession(cancellation, deadline); }
+      catch (error) {
+        if (this.disposed || cancellation.isCancelled || Date.now() >= deadline) { return false; }
+        if (!(error instanceof ForumApiError) ||
+          [ForumErrorKind.Network, ForumErrorKind.Timeout, ForumErrorKind.VerificationRequired].indexOf(error.kind) < 0 ||
+          probes >= 3) { return false; }
+        nextProbeAt = Date.now() + 2000;
+        continue;
+      }
+      if (cancellation.isCancelled) { return false; }
+      if (!this.navigationCommitted || document !== this.documentRevision || navigation !== this.navigationRevision) { continue; }
+      if (response.status === 200 && !(response.headers['cf-mitigated'] ?? '') &&
+        (response.headers['content-type'] ?? '').toLowerCase().indexOf('application/json') >= 0) {
+        try {
+          const value: CsrfProbe = JSON.parse(response.body) as CsrfProbe;
+          if (typeof value.csrf === 'string' && value.csrf.length > 0 && value.csrf.length <= 4096 && !/[\r\n]/.test(value.csrf)) {
+            // Keep ArkWeb as the only cookie owner; never restore an old clearance backup.
+            try { await webview.WebCookieManager.saveCookieAsync(); } catch { /* The valid live session is still usable. */ }
+            if (this.disposed || cancellation.isCancelled || Date.now() >= deadline) { return false; }
+            if (!this.navigationCommitted || document !== this.documentRevision || navigation !== this.navigationRevision ||
+              !this.isTrustedPage() || !await this.canProbeDocument()) { continue; }
+            return !this.disposed && !cancellation.isCancelled && Date.now() < deadline && this.navigationCommitted &&
+              document === this.documentRevision && navigation === this.navigationRevision && this.isTrustedPage();
+          }
+        } catch { /* HTML, malformed JSON and incomplete challenge responses are not success. */ }
+      }
+      if (probes >= 3) { return false; }
+      nextProbeAt = Date.now() + 2000;
+    }
+    return false;
+  }
+
+  private async probeSession(cancellation: RequestCancellation, deadline: number): Promise<BrowserResponse> {
+    const probe: RequestCancellation = new RequestCancellation();
+    const cancel: () => void = (): void => probe.cancel();
+    cancellation.onCancel(cancel);
+    const timer: number = setTimeout(cancel, Math.max(0, deadline - Date.now()));
+    try {
+      return await this.request({ path: '/session/csrf.json', method: 'GET', body: '', csrf: '' }, probe);
+    } finally { clearTimeout(timer); cancellation.offCancel(cancel); }
+  }
+
   private async requestToken(): Promise<string> {
     try {
       if (!canIUse('SystemCapability.Security.CryptoFramework.Rand')) {
@@ -119,7 +254,7 @@ export class BrowserTransportAdapter {
       for (let index: number = 0; index < blob.data.length; index++) {
         value += blob.data[index].toString(16).padStart(2, '0');
       }
-      if (value.length !== 32 || this.pending.has(value)) {
+      if (value.length !== 32 || this.pending.has(value) || this.mediaPending.has(value)) {
         throw new ForumApiError(ForumErrorKind.Network, 0, '无法创建网页请求');
       }
       return value;
@@ -138,7 +273,7 @@ export class BrowserTransportAdapter {
     if (!this.isTrustedPage()) {
       throw new ForumApiError(ForumErrorKind.VerificationRequired, 0, '请先在社区网页中完成验证');
     }
-    if (this.pending.size >= MAX_ACTIVE_REQUESTS) {
+    if (this.pending.size + this.mediaPending.size >= MAX_ACTIVE_REQUESTS) {
       throw new ForumApiError(ForumErrorKind.Network, 0, '网页请求较多，请稍后重试');
     }
     let id: string = '';
@@ -151,7 +286,7 @@ export class BrowserTransportAdapter {
     if (!this.isTrustedPage()) {
       throw new ForumApiError(ForumErrorKind.VerificationRequired, 0, '网页会话已变化，请重新完成验证');
     }
-    if (this.pending.size >= MAX_ACTIVE_REQUESTS) {
+    if (this.pending.size + this.mediaPending.size >= MAX_ACTIVE_REQUESTS) {
       throw new ForumApiError(ForumErrorKind.Network, 0, '网页请求较多，请稍后重试');
     }
 
@@ -220,6 +355,9 @@ export class BrowserTransportAdapter {
   }
 
   private receive(id: string, serialized: string): void {
+    if (!this.disposed && typeof id === 'string' && /^[0-9a-f]{32}$/.test(id) && this.mediaPending.has(id)) {
+      this.receiveMedia(id, serialized); return;
+    }
     if (this.disposed || typeof id !== 'string' || !/^[0-9a-f]{32}$/.test(id) || !this.pending.has(id)) { return; }
     const entry: PendingRequest | undefined = this.pending.get(id);
     if (entry === undefined) { return; }
@@ -257,6 +395,123 @@ export class BrowserTransportAdapter {
     } catch {
       this.fail(id, new ForumApiError(ForumErrorKind.InvalidResponse, 0, '网页响应格式不正确，请重新验证'), true);
     }
+  }
+
+  async requestImage(url: string, cancellation: RequestCancellation): Promise<BrowserMediaResponse> {
+    const destination: string = browserMediaUrl(url);
+    if (!destination) { throw new ForumApiError(ForumErrorKind.Rejected, 0, '图片地址不支持网页加载'); }
+    if (this.disposed || cancellation.isCancelled) { throw cancelledError(); }
+    if (!this.isTrustedPage()) { throw new ForumApiError(ForumErrorKind.VerificationRequired, 0, '请先完成网页验证'); }
+    const id: string = await this.requestToken();
+    if (this.disposed || cancellation.isCancelled) { throw cancelledError(); }
+    if (!this.isTrustedPage()) { throw new ForumApiError(ForumErrorKind.VerificationRequired, 0, '网页会话已变化，请重新验证'); }
+    if (this.pending.size + this.mediaPending.size >= MAX_ACTIVE_REQUESTS) {
+      throw new ForumApiError(ForumErrorKind.Network, 0, '网页图片请求较多，请稍后重试');
+    }
+    return new Promise<BrowserMediaResponse>((resolve, reject): void => {
+      const cancelHandler: () => void = (): void => this.failMedia(id, cancelledError(), true);
+      const entry: PendingMediaRequest = { transfer: new BrowserMediaTransfer(), resolve: resolve, reject: reject,
+        timer: 0, cancellation: cancellation, cancelHandler: cancelHandler };
+      this.mediaPending.set(id, entry);
+      entry.timer = setTimeout((): void => this.failMedia(id,
+        new ForumApiError(ForumErrorKind.Timeout, 0, '图片加载超时，请稍后重试'), true), REQUEST_TIMEOUT_MS);
+      cancellation.onCancel(cancelHandler);
+      if (!this.mediaPending.has(id)) { return; }
+      try {
+        this.controller.runJavaScript(this.mediaScript(id, destination)).then((result: string): void => {
+          if (result === 'wrong_origin' || result === '"wrong_origin"' || result === 'missing_bridge' || result === '"missing_bridge"') {
+            this.failMedia(id, new ForumApiError(ForumErrorKind.VerificationRequired, 0, '网页图片会话尚未就绪'), true);
+          }
+        }).catch((): void => this.failMedia(id, new ForumApiError(ForumErrorKind.Network, 0, '图片请求未完成，请重试'), true));
+      } catch { this.failMedia(id, new ForumApiError(ForumErrorKind.Network, 0, '图片请求未完成，请重试'), true); }
+    });
+  }
+
+  private removeMedia(id: string): PendingMediaRequest | undefined {
+    const entry: PendingMediaRequest | undefined = this.mediaPending.get(id);
+    if (entry) {
+      this.mediaPending.delete(id); clearTimeout(entry.timer);
+      entry.cancellation.offCancel(entry.cancelHandler);
+    }
+    return entry;
+  }
+  private failMedia(id: string, error: ForumApiError, abort: boolean): void {
+    const entry: PendingMediaRequest | undefined = this.removeMedia(id);
+    if (!entry) { return; }
+    entry.transfer.dispose();
+    if (abort) { this.abort(id); }
+    entry.reject(error);
+  }
+  private receiveMedia(id: string, serialized: string): void {
+    const entry: PendingMediaRequest | undefined = this.mediaPending.get(id);
+    if (!entry) { return; }
+    if (!this.isTrustedPage()) { this.failMedia(id, cancelledError(), true); return; }
+    try {
+      const response: BrowserMediaResponse | undefined = entry.transfer.accept(serialized);
+      if (response) { this.removeMedia(id)?.resolve(response); }
+    } catch (error) {
+      this.failMedia(id, error instanceof ForumApiError ? error :
+        new ForumApiError(ForumErrorKind.InvalidResponse, 0, '图片传输不完整，请重试'), true);
+    }
+  }
+
+  private mediaScript(id: string, url: string): string {
+    return `(() => {
+      if (location.origin !== ${jsonLiteral(FORUM_ORIGIN)} || window !== window.top) return 'wrong_origin';
+      const bridge = window[${jsonLiteral(this.bridgeName)}];
+      if (!bridge || typeof bridge.receive !== 'function') return 'missing_bridge';
+      const destination = new URL(${jsonLiteral(url)});
+      if (destination.protocol !== 'https:' || destination.username || destination.password ||
+          !['linux.do', 'cdn3.ldstatic.com'].includes(destination.hostname) || (destination.port && destination.port !== '443')) return 'wrong_origin';
+      const id = ${jsonLiteral(id)}, slot = ${jsonLiteral(REQUEST_SLOT)};
+      const active = window[slot] instanceof Map ? window[slot] : new Map(); window[slot] = active;
+      const aborter = new AbortController(); active.set(id, aborter);
+      let finished = false, timer = 0;
+      const send = value => { if (!finished) bridge.receive(id, JSON.stringify(value)); };
+      const finish = value => { if (finished) return; send(value); finished = true; clearTimeout(timer); active.delete(id); };
+      timer = setTimeout(() => { aborter.abort(); finish({ type: 'error', error: 'timeout' }); }, ${REQUEST_TIMEOUT_MS - 500});
+      (async () => {
+        let reader;
+        try {
+          const local = destination.origin === ${jsonLiteral(FORUM_ORIGIN)};
+          const response = await fetch(destination.href, { method: 'GET', headers: { Accept: 'image/*' },
+            credentials: local ? 'include' : 'omit', mode: local ? 'same-origin' : 'cors', redirect: 'error',
+            referrerPolicy: local ? 'same-origin' : 'no-referrer', cache: 'no-store', signal: aborter.signal });
+          if (new URL(response.url).origin !== destination.origin) throw new Error('wrong_origin');
+          const headers = { contentType: (response.headers.get('content-type') || '').slice(0, 1024),
+            mitigated: (response.headers.get('cf-mitigated') || '').slice(0, 1024) };
+          send({ type: 'start', status: response.status, headers });
+          if (!response.ok || headers.mitigated || !/^(image\\/|application\\/octet-stream)/i.test(headers.contentType)) {
+            aborter.abort(); finish({ type: 'error', error: 'invalid_image' }); return;
+          }
+          if (Number(response.headers.get('content-length') || '0') > ${MAX_BROWSER_MEDIA_BYTES}) throw new Error('too_large');
+          if (!response.body) throw new Error('invalid_image');
+          reader = response.body.getReader();
+          const buffer = new Uint8Array(${BROWSER_MEDIA_CHUNK_BYTES});
+          let used = 0, total = 0, sent = 0, index = 0;
+          const flush = () => {
+            let text = ''; for (let i = 0; i < used; i++) text += String.fromCharCode(buffer[i]);
+            send({ type: 'chunk', index: index++, offset: sent, data: btoa(text) }); sent += used; used = 0;
+          };
+          while (true) {
+            const chunk = await reader.read(); if (chunk.done) break;
+            total += chunk.value.byteLength;
+            if (total > ${MAX_BROWSER_MEDIA_BYTES}) throw new Error('too_large');
+            let offset = 0;
+            while (offset < chunk.value.byteLength) {
+              const count = Math.min(buffer.length - used, chunk.value.byteLength - offset);
+              buffer.set(chunk.value.subarray(offset, offset + count), used); used += count; offset += count;
+              if (used === buffer.length) flush();
+            }
+          }
+          if (used) flush(); finish({ type: 'done', total });
+        } catch (error) {
+          if (reader) reader.cancel().catch(() => {}); aborter.abort();
+          finish({ type: 'error', error: error && error.message === 'too_large' ? 'too_large' : 'network' });
+        }
+      })();
+      return 'started';
+    })();`;
   }
 
   private fetchScript(id: string, request: BrowserRequest): string {
@@ -331,6 +586,7 @@ export class BrowserTransportAdapter {
     if (this.disposed) { return; }
     this.disposed = true;
     this.pending.forEach((_entry: PendingRequest, id: string): void => { this.fail(id, cancelledError(), true); });
+    this.mediaPending.forEach((_entry: PendingMediaRequest, id: string): void => { this.failMedia(id, cancelledError(), true); });
     try { this.controller.deleteJavaScriptRegister(this.bridgeName); }
     catch { /* The Web component may already have been released. */ }
   }

@@ -1,5 +1,6 @@
 **/oh_modules/
 **/node_modules/
+**/__pycache__/
 **/.hvigor/
 **/build/
 **/.idea/
@@ -10,6 +11,7 @@
 *.csr
 .DS_Store
 /artifacts/
+/experiments/ech-probe/target/
 /.reference/
 /app/build-profile.json5
 /.local-test-runtime/

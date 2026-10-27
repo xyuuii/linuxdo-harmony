@@ -6,7 +6,8 @@ import { util, url as urlUtils } from '@kit.ArkTS';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { forumSession } from '../models/ForumSession';
-import { forumApi, RequestCancellation, ForumApiError, ForumErrorKind } from './ForumApi';
+import { forumApi, RequestCancellation, ForumApiError, ForumErrorKind, BrowserMediaResponse } from './ForumApi';
+import { browserMediaUrl } from './BrowserMediaPolicy';
 
 const MAX_MEDIA_BYTES: number = 20 * 1024 * 1024;
 const MAX_CACHE_BYTES: number = 100 * 1024 * 1024;
@@ -153,6 +154,12 @@ function headerValue(headers: Record<string, string | string[]>, name: string): 
 }
 async function requestMedia(parsed: urlUtils.URL, scope: MediaScope, cancellation: RequestCancellation): Promise<ArrayBuffer> {
   ensureScope(scope, cancellation);
+  if (forumApi.canUseBrowserMedia() && browserMediaUrl(parsed.href)) {
+    const response: BrowserMediaResponse = await forumApi.requestBrowserMedia(parsed.href, cancellation);
+    ensureScope(scope, cancellation);
+    checkMediaHeaders(response.status, response.headers);
+    return checkMediaBytes(response.bytes, response.status);
+  }
   const headers: Record<string, string> = { 'Accept': 'image/*', 'User-Agent': forumApi.getUserAgent() };
   if (parsed.hostname === 'linux.do') {
     headers['Referer'] = 'https://linux.do/';
@@ -202,27 +209,37 @@ async function requestMedia(parsed: urlUtils.URL, scope: MediaScope, cancellatio
     ensureScope(scope, cancellation);
     const responseHeaders: Record<string, string | string[]> = response.header as Record<string, string | string[]>;
     const status: number = response.responseCode;
-    if (headerValue(responseHeaders, 'cf-mitigated') || status === 403) {
-      throw new ForumApiError(ForumErrorKind.VerificationRequired, status, '图片访问需要网页验证');
-    }
-    if (status === 401) { throw new ForumApiError(ForumErrorKind.AuthenticationRequired, status, '图片登录会话已过期'); }
-    if (status === 429) { throw new ForumApiError(ForumErrorKind.RateLimited, status, '图片请求过于频繁，请稍后重试'); }
-    if (status < 200 || status >= 300) {
-      throw new ForumApiError(ForumErrorKind.Rejected, status, status >= 300 && status < 400 ? '图片需要跳转，请使用网页查看' : '图片暂不可用');
-    }
-    if (!(response.result instanceof ArrayBuffer) || response.result.byteLength === 0 || response.result.byteLength > MAX_MEDIA_BYTES) {
+    checkMediaHeaders(status, responseHeaders);
+    if (!(response.result instanceof ArrayBuffer)) {
       throw new ForumApiError(ForumErrorKind.InvalidResponse, status, '图片文件为空或超过 20 MB 上限');
     }
-    const contentType: string = headerValue(responseHeaders, 'content-type').toLowerCase();
-    if (contentType && !contentType.startsWith('image/') && !contentType.startsWith('application/octet-stream')) {
-      throw new ForumApiError(ForumErrorKind.InvalidResponse, status, '社区没有返回图片内容');
-    }
-    return response.result;
+    return checkMediaBytes(response.result, status);
   } finally {
     if (timer >= 0) { clearTimeout(timer); }
     cancellation.offCancel(cancel);
     try { request.destroy(); } catch { /* Released by cancellation or timeout. */ }
   }
+}
+function checkMediaHeaders(status: number, headers: Record<string, string | string[]>): void {
+  if (headerValue(headers, 'cf-mitigated') || status === 403) {
+    throw new ForumApiError(ForumErrorKind.VerificationRequired, status, '图片访问需要网页验证');
+  }
+  if (status === 401) { throw new ForumApiError(ForumErrorKind.AuthenticationRequired, status, '图片登录会话已过期'); }
+  if (status === 429) { throw new ForumApiError(ForumErrorKind.RateLimited, status, '图片请求过于频繁，请稍后重试'); }
+  if (status < 200 || status >= 300) {
+    throw new ForumApiError(ForumErrorKind.Rejected, status,
+      status >= 300 && status < 400 ? '图片需要跳转，请使用网页查看' : '图片暂不可用');
+  }
+  const type: string = headerValue(headers, 'content-type').toLowerCase();
+  if (type && !type.startsWith('image/') && !type.startsWith('application/octet-stream')) {
+    throw new ForumApiError(ForumErrorKind.InvalidResponse, status, '社区没有返回图片内容');
+  }
+}
+function checkMediaBytes(bytes: ArrayBuffer, status: number): ArrayBuffer {
+  if (!(bytes instanceof ArrayBuffer) || bytes.byteLength === 0 || bytes.byteLength > MAX_MEDIA_BYTES) {
+    throw new ForumApiError(ForumErrorKind.InvalidResponse, status, '图片文件为空或超过 20 MB 上限');
+  }
+  return bytes;
 }
 async function writeMedia(path: string, bytes: ArrayBuffer, scope: MediaScope, cancellation: RequestCancellation): Promise<void> {
   ensureScope(scope, cancellation);
@@ -234,6 +251,21 @@ async function writeMedia(path: string, bytes: ArrayBuffer, scope: MediaScope, c
   } finally { await fileIo.close(file); }
   ensureScope(scope, cancellation);
 }
+async function requestMediaWithRecovery(parsed: urlUtils.URL, scope: MediaScope,
+  cancellation: RequestCancellation): Promise<ArrayBuffer> {
+  const recoveredBeforeRequest: number = forumApi.getReadRecoveryVersion();
+  try { return await requestMedia(parsed, scope, cancellation); }
+  catch (error) {
+    // External images never trigger forum navigation or receive forum credentials.
+    if (!(error instanceof ForumApiError)) { throw new ForumApiError(ForumErrorKind.Network, 0, '图片请求未完成，请稍后重试'); }
+    if (error.kind !== ForumErrorKind.VerificationRequired || parsed.hostname !== 'linux.do') { throw error; }
+    // Another read may already have recovered while this old native challenge was in flight.
+    if (!(forumApi.canUseBrowserMedia() && forumApi.getReadRecoveryVersion() !== recoveredBeforeRequest) &&
+      !await forumApi.recoverReadSession(cancellation)) { throw error; }
+    ensureScope(scope, cancellation);
+    return requestMedia(parsed, scope, cancellation);
+  }
+}
 async function fetchAndCache(parsed: urlUtils.URL, context: common.UIAbilityContext, scope: MediaScope,
   cancellation: RequestCancellation, key: string): Promise<string> {
   let path: string = '';
@@ -241,11 +273,11 @@ async function fetchAndCache(parsed: urlUtils.URL, context: common.UIAbilityCont
   try {
     await acquire(cancellation); acquired = true;
     ensureScope(scope, cancellation);
-    const bytes: ArrayBuffer = await requestMedia(parsed, scope, cancellation);
+    const bytes: ArrayBuffer = await requestMediaWithRecovery(parsed, scope, cancellation);
     const digest: string = await digestUrl(parsed.href);
     const directory: string = await directoryFor(context, scope, cancellation);
     // No URL, query, cookie or credentials are included in a cache filename.
-    path = `${directory}/${digest}-${util.generateRandomUUID()}.image`;
+    path = `${directory}/${digest}-${util.generateRandomUUID()}.${mediaFileExtension(bytes)}`;
     await writeMedia(path, bytes, scope, cancellation);
     const uri: string = fileUri.getUriFromPath(path);
     ensureScope(scope, cancellation);
@@ -259,6 +291,14 @@ async function fetchAndCache(parsed: urlUtils.URL, context: common.UIAbilityCont
     if (error instanceof ForumApiError) { throw error; }
     throw new ForumApiError(ForumErrorKind.Network, 0, '图片加载或缓存失败，请稍后重试');
   } finally { if (acquired) { release(); } }
+}
+function mediaFileExtension(bytes: ArrayBuffer): string {
+  const header: Uint8Array = new Uint8Array(bytes, 0, Math.min(bytes.byteLength, 12));
+  if (header.length >= 6 && header[0] === 0x47 && header[1] === 0x49 && header[2] === 0x46 &&
+    header[3] === 0x38 && (header[4] === 0x37 || header[4] === 0x39) && header[5] === 0x61) { return 'gif'; }
+  if (header.length >= 12 && header[0] === 0x52 && header[1] === 0x49 && header[2] === 0x46 && header[3] === 0x46 &&
+    header[8] === 0x57 && header[9] === 0x45 && header[10] === 0x42 && header[11] === 0x50) { return 'webp'; }
+  return 'image';
 }
 async function awaitShared(task: MediaTask, scope: MediaScope, cancellation?: RequestCancellation): Promise<string> {
   ensureScope(scope, cancellation);

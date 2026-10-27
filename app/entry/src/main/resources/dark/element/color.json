@@ -1,5 +1,7 @@
 {
   "color": [
+    { "name": "edge_backdrop_tint", "value": "#4D11151D" },
+    { "name": "edge_backdrop_clear", "value": "#0011151D" },
     { "name": "boost_background", "value": "#2A2D31" },
     { "name": "touch_light_core", "value": "#B3FFFFFF" },
     { "name": "touch_light_halo", "value": "#668FC5FF" },

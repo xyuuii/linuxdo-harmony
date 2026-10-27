@@ -19,6 +19,7 @@ import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { handednessState } from '../services/HandednessState';
+import { forumApi } from '../services/ForumApi';
 
 const DOMAIN = 0x0000;
 
@@ -76,6 +77,7 @@ export default class EntryAbility extends UIAbility {
 
   onForeground(): void {
     this.foreground = true;
+    forumApi.setForeground(true);
     handednessState.start();
     // Ability has brought to foreground
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onForeground');
@@ -83,6 +85,7 @@ export default class EntryAbility extends UIAbility {
 
   onBackground(): void {
     this.foreground = false;
+    forumApi.setForeground(false);
     handednessState.stop();
     // Ability has back to background
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');

@@ -8,6 +8,7 @@ export struct AboutPage {
   @Param topInset: number = 0;
   @Param bottomInset: number = 0;
   @Event onVerify: () => void = (): void => {};
+  @Event onConnectionProbe: () => void = (): void => {};
   private openSource(): void {
     const context: common.UIAbilityContext | undefined = this.getUIContext().getHostContext() as common.UIAbilityContext;
     if (context !== undefined) {
@@ -45,6 +46,9 @@ export struct AboutPage {
             .backgroundColor($r('app.color.surface')).fontColor($r('app.color.accent')).onClick(() => { this.onVerify(); })
           Button('查看参考项目', { type: ButtonType.Capsule }).height(48).width('100%')
             .backgroundColor($r('app.color.surface')).fontColor($r('app.color.accent')).onClick(() => { this.openSource(); })
+          Button('检测连接能力', { type: ButtonType.Capsule }).height(48).width('100%')
+            .backgroundColor($r('app.color.surface')).fontColor($r('app.color.accent'))
+            .onClick(() => { this.onConnectionProbe(); }).id('open_connection_probe')
           Text('行为与接口参考 xuemk/linuxdo-android，界面与平台能力以 ArkTS 和 ArkUI 原生实现。')
             .fontSize(13).lineHeight(22).fontColor($r('app.color.text_secondary')).width('100%')
         }.width('100%').padding(24).alignItems(HorizontalAlign.Start)

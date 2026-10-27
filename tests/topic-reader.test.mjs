@@ -73,7 +73,8 @@ function readerRuntime() {
   const session = { user: { id: 7 }, revision: 1 };
   const prohibited = () => { throw new Error('Native I/O is prohibited in reader method tests.'); };
   const api = { fetchTopic: prohibited, fetchPosts: prohibited, getUserAgent: prohibited, toggleReaction: prohibited,
-    cachedCategories: () => [], fetchCategories: prohibited };
+    cachedCategories: () => [], fetchCategories: prohibited, getSessionGeneration: () => 0,
+    emojiUrls: async () => new Map() };
   class ForumApiError extends Error { constructor(kind, message) { super(message); this.kind = kind; } }
   const exports = load(declarations + '\n' + pageClass, {
     forumSession: session,
@@ -171,6 +172,56 @@ test('reader category metadata uses the cached nested category and ignores late 
     await pending;
     assert.equal(page.topicCategory, undefined, invalidation);
   }
+});
+
+test('reaction images keep the current catalog through refresh and reject stale, hidden or other-account directories', async () => {
+  const { page, api, session } = readerRuntime();
+  let generation = 0;
+  api.getSessionGeneration = () => generation;
+  const urls = new Map([
+    ['hugs', 'https://linux.do/images/emoji/twemoji/hugs.png?v=15'],
+    ['bili_057', 'https://emoji.example.test/custom/bili_057.gif']
+  ]);
+  api.emojiUrls = async () => urls;
+  await page.loadReactionEmojis(page.generation, 7);
+  assert.strictEqual(page.reactionEmojiUrls, urls);
+  page.accountChanged();
+  assert.strictEqual(page.reactionEmojiUrls, urls, 'The same account refresh must not discard usable images.');
+  for (const invalidation of ['owner', 'reader', 'api', 'hidden']) {
+    session.user = { id: 7 };
+    page.hidden = false;
+    let release;
+    api.emojiUrls = () => new Promise(resolve => { release = resolve; });
+    const pending = page.loadReactionEmojis(page.generation, 7);
+    if (invalidation === 'owner') { session.user = { id: 9 }; }
+    if (invalidation === 'reader') { page.generation++; }
+    if (invalidation === 'api') { generation++; }
+    if (invalidation === 'hidden') { page.hidden = true; }
+    release(new Map([['late', 'https://emoji.example.test/late.gif']]));
+    await pending;
+    assert.strictEqual(page.reactionEmojiUrls, urls, invalidation);
+  }
+  page.hidden = false;
+  session.user = { id: 9 };
+  page.accountChanged();
+  assert.equal(page.reactionEmojiUrls.size, 0, 'Another account cannot retain the previous account directory.');
+});
+
+test('a successful topic read also resolves reaction image names without delaying the readable post', async () => {
+  const { page, api, productionReload } = readerRuntime();
+  const post = { ...imagePost(1, '<p>fixture</p>'), reactions: [{ id: 'hugs', count: 1 }] };
+  api.fetchTopic = async () => ({ id: 100, postStream: { posts: [post], stream: [1] }, validReactions: ['hugs'] });
+  let release;
+  let catalogCalls = 0;
+  api.emojiUrls = () => { catalogCalls++; return new Promise(resolve => { release = resolve; }); };
+  page.topicId = 100;
+  await productionReload(1);
+  assert.equal(page.posts[0].reactions[0].id, 'hugs');
+  assert.equal(page.loading, false);
+  assert.equal(catalogCalls, 1);
+  release(new Map([['hugs', 'https://linux.do/images/emoji/twemoji/hugs.png?v=15']]));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(page.reactionEmojiUrls.get('hugs'), 'https://linux.do/images/emoji/twemoji/hugs.png?v=15');
 });
 
 test('returning before a like completes queues exactly one visible server confirmation and never repeats the toggle', async () => {

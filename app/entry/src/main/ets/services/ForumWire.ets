@@ -6,7 +6,7 @@ import {
 export interface TagWire { name?: string; }
 export interface PosterWire { user_id?: number; description?: string; }
 export interface UserWire {
-  id?: number; username?: string; name?: string; avatar_template?: string; trust_level?: number;
+  id?: number; username?: string; name?: string; avatar_template?: string; animated_avatar?: string; trust_level?: number;
   created_at?: string; bio_raw?: string; bio_cooked?: string; email?: string;
 }
 export interface TopicWire {
@@ -27,7 +27,7 @@ export interface CategoryResponseWire { category_list?: CategoryListWire; }
 export interface ReactionWire { id?: string; count?: number; can_undo?: boolean; }
 export interface BoostWire { id?: number; cooked?: string; user?: UserWire; can_delete?: boolean; }
 export interface PostWire {
-  id?: number; username?: string; avatar_template?: string; post_number?: number; created_at?: string;
+  id?: number; username?: string; avatar_template?: string; animated_avatar?: string; post_number?: number; created_at?: string;
   cooked?: string; topic_id?: number; blurb?: string; reply_to_post_number?: number; reply_count?: number;
   boosts?: BoostWire[]; reactions?: ReactionWire[]; current_user_reaction?: ReactionWire; yours?: boolean;
   can_boost?: boolean; can_accept_answer?: boolean; can_unaccept_answer?: boolean; accepted_answer?: boolean;
@@ -118,7 +118,7 @@ export function userFromWire(value: UserWire): DiscourseUser {
   if (username.length === 0) { throw new Error('Invalid username'); }
   const template: string = text(value.avatar_template);
   return { id: requireUserId(value.id), username: username, name: text(value.name), avatarTemplate: template,
-    avatarUrl: avatarUrlOf(template), trustLevel: numberValue(value.trust_level) };
+    avatarUrl: avatarUrlOf(template, 144, text(value.animated_avatar)), trustLevel: numberValue(value.trust_level) };
 }
 export function topicFromWire(value: TopicWire): Topic {
   if (typeof value.title !== 'string') { throw new Error('Invalid title'); }
@@ -159,7 +159,7 @@ export function boostFromWire(value: BoostWire): Boost {
 export function postFromWire(value: PostWire): Post {
   const template: string = text(value.avatar_template);
   return { id: requireId(value.id), username: text(value.username), avatarTemplate: template,
-    avatarUrl: avatarUrlOf(template), postNumber: numberValue(value.post_number), createdAt: text(value.created_at),
+    avatarUrl: avatarUrlOf(template, 144, text(value.animated_avatar)), postNumber: numberValue(value.post_number), createdAt: text(value.created_at),
     cooked: text(value.cooked), topicId: numberValue(value.topic_id), blurb: plainText(text(value.blurb)),
     replyToPostNumber: numberValue(value.reply_to_post_number), replyCount: numberValue(value.reply_count),
     boosts: list(value.boosts).map((boost: BoostWire): Boost => boostFromWire(boost)),

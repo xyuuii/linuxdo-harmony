@@ -44,7 +44,8 @@ export function materialFor(settings: AppearanceSettings): uiMaterial.Material {
       return new uiMaterial.ImmersiveMaterial({
         style: uiMaterial.ImmersiveStyle.REGULAR,
         materialColor: $r('app.color.material_tint'),
-        applyShadow: true,
+        // Native material shadows override the component shadow; keep touch light independent.
+        applyShadow: false,
         interactive: false,
         // Direct touch illumination stays usable when transition/elastic motion is reduced.
         lightEffect: {}
@@ -54,13 +55,46 @@ export function materialFor(settings: AppearanceSettings): uiMaterial.Material {
     return new uiMaterial.ImmersiveMaterial({
       style: uiMaterial.ImmersiveStyle.THIN,
       materialColor: $r('app.color.material_tint'),
-      applyShadow: true,
+      applyShadow: false,
       interactive: !settings.reduceMotion,
       lightEffect: {}
     });
   } catch {
     return uiMaterial.Material.empty;
   }
+}
+
+/** Only use on a component inside a native title bar or horizontal bottom TabBar. */
+export function readerMaterialFor(settings: AppearanceSettings): uiMaterial.ImmersiveMaterial | undefined {
+  if (!Number.isInteger(settings.effectLevel) || settings.effectLevel < 1 || settings.effectLevel > 3 ||
+    settings.highContrast || !materialSupported()) {
+    return undefined;
+  }
+
+  try {
+    return new uiMaterial.ImmersiveMaterial({
+      style: settings.effectLevel === 3 ? uiMaterial.ImmersiveStyle.ULTRA_THIN : uiMaterial.ImmersiveStyle.THIN,
+      applyShadow: false,
+      interactive: settings.effectLevel === 3 && !settings.reduceMotion,
+      lightEffect: settings.effectLevel >= 2 ? {} : null
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+/** Raw translucent blur for headers and the fallback path; never paint it over a native material. */
+export function readerBackdropFor(settings: AppearanceSettings): BackgroundEffectOptions | undefined {
+  if (!Number.isInteger(settings.effectLevel) || settings.effectLevel < 1 || settings.effectLevel > 3 ||
+    settings.highContrast) {
+    return undefined;
+  }
+  return {
+    radius: settings.effectLevel === 1 ? 12 : settings.effectLevel === 2 ? 10 : 8,
+    saturation: 1.1,
+    brightness: 1,
+    color: '#00FFFFFF'
+  };
 }
 
 /** HdsTabs uses SystemMaterialParams, independently of ArkUI Material objects. */

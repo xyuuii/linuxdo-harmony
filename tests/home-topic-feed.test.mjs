@@ -33,7 +33,7 @@ const end = feedSource.indexOf('  @LocalBuilder', start);
 assert.ok(start >= 0 && end > start, 'Execute the production page class and pager methods, not a rewritten policy.');
 const feedClass = (feedSource.slice(start, end) + '\n}\n')
   .replace('export struct HomeTopicFeed', 'export class HomeTopicFeed')
-  .replace(/^\s*@(?:ObservedV2|ComponentV2|Monitor\([^\n]*\))\s*\n/gm, '\n')
+  .replace(/^\s*@(?:ObservedV2|ComponentV2|Computed|Monitor\([^\n]*\))\s*\n/gm, '\n')
   .replace(/@(Param|Event|Local|Trace) /g, '');
 
 // The controller and scroller stand in for native boundaries only. The actual
@@ -186,26 +186,48 @@ test('refresh requests while inactive or unmounted coalesce into one refresh of 
   }
 });
 
-test('scroll notifications come only from the selected page and derive atTop from that page own scroller', () => {
-  const { feed, reads } = runtime();
-  feed.pageChanged(3);
-  feed.pages[0].scroller.offset = 0;
-  feed.pages[3].scroller.offset = 500;
-  feed.readPageScroll(feed.pages[0], 30, 1, 2);
-  assert.deepEqual(reads, []);
-  assert.equal(feed.pages[0].scroller.reads, 0, 'A hidden old homepage must not influence navigation.');
-  feed.readPageScroll(feed.pages[3], 30, 1, 2);
-  assert.deepEqual(reads, [[30, 1, 2, false]]);
-  feed.pages[0].scroller.offset = 500;
-  feed.pages[3].scroller.offset = 1;
-  feed.readPageScroll(feed.pages[3], -30, 2, 1);
-  feed.pages[3].scroller.offset = -5;
-  feed.readPageScroll(feed.pages[3], -3, 2, 1);
-  assert.deepEqual(reads, [[30, 1, 2, false], [-30, 2, 1, true], [-3, 2, 1, true]]);
-  feed.pages[3].scroller.offset = 1.01;
-  feed.readPageScroll(feed.pages[3], 1, 1, 2);
-  assert.deepEqual(reads.at(-1), [1, 1, 2, false]);
-  assert.equal(feed.pages[0].scroller.reads, 0);
+test('scroll notifications use the selected page native origin including the real top inset and measured overlay header', () => {
+  for (const topInset of [0, 38.85, 56]) {
+    const { feed, reads } = runtime();
+    feed.topInset = topInset;
+    feed.measureHeader(112);
+    feed.pageChanged(3);
+    feed.pages[0].scroller.offset = 0;
+    feed.pages[3].scroller.offset = 500;
+    feed.readPageScroll(feed.pages[0], 30, 1, 2);
+    assert.deepEqual(reads, []);
+    assert.equal(feed.pages[0].scroller.reads, 0, 'A hidden old homepage must not influence navigation.');
+    feed.readPageScroll(feed.pages[3], 30, 1, 2);
+    assert.deepEqual(reads, [[30, 1, 2, false]]);
+    feed.pages[0].scroller.offset = 500;
+    feed.pages[3].scroller.offset = -feed.contentTopInset + 1;
+    feed.readPageScroll(feed.pages[3], -30, 2, 1);
+    feed.pages[3].scroller.offset = -feed.contentTopInset - 5;
+    feed.readPageScroll(feed.pages[3], -3, 2, 1);
+    assert.deepEqual(reads, [[30, 1, 2, false], [-30, 2, 1, true], [-3, 2, 1, true]]);
+    feed.pages[3].scroller.offset = -feed.contentTopInset + 1.01;
+    feed.readPageScroll(feed.pages[3], 1, 1, 2);
+    assert.deepEqual(reads.at(-1), [1, 1, 2, false]);
+    assert.equal(feed.pages[0].scroller.reads, 0);
+  }
+});
+
+test('overlay header measurements update the native content origin without replacing pages or their scroll state', () => {
+  const { feed } = runtime();
+  const pages = [...feed.pages];
+  feed.topInset = 38.85;
+  feed.pages[0].scroller.offset = 420;
+  const original = feed.contentTopInset;
+  for (const invalid of [0, -1, NaN, Infinity]) { feed.measureHeader(invalid); }
+  assert.equal(feed.contentTopInset, original);
+  feed.measureHeader(112);
+  assert.equal(feed.contentTopInset, 150.85);
+  feed.measureHeader(112.2);
+  assert.equal(feed.contentTopInset, 150.85, 'Subpixel area noise must not keep invalidating every list origin.');
+  feed.topInset = 56;
+  assert.equal(feed.contentTopInset, 168, 'Window avoid-area changes remain separate from the content header height.');
+  feed.pages.forEach((page, index) => assert.strictEqual(page, pages[index]));
+  assert.equal(feed.pages[0].scroller.offset, 420);
 });
 
 test('inactive and unmounted pager scroll callbacks neither read native scroll state nor notify navigation', () => {

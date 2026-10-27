@@ -166,12 +166,20 @@ export function safeForumUrl(value: string): string {
   return '';
 }
 
-export function avatarUrlOf(template: string, size: number = 144): string {
-  if (template.length === 0) { return ''; }
-  const path: string = template.replace('{size}', String(size));
-  if (path.startsWith('//')) { return 'https:' + path; }
-  if (path.startsWith('https://')) { return path; }
-  return path.startsWith('/') ? 'https://linux.do' + path : '';
+function avatarImageUrl(value: string): string {
+  if (!value || /[\s\u0000-\u0020\u007F-\u009F\\]/.test(value)) { return ''; }
+  const absolute: string = value.startsWith('//') ? 'https:' + value :
+    value.startsWith('/') ? 'https://linux.do' + value : value;
+  // Accept canonical HTTPS image addresses; ForumMedia validates the actual request again.
+  if (!/^https:\/\/[a-z0-9.-]+(?::443)?\/[^?#]*(?:\?[^#]*)?(?:#.*)?$/i.test(absolute)) { return ''; }
+  return 'https://' + absolute.substring(8);
+}
+
+export function avatarUrlOf(template: string, size: number = 144, animatedAvatar: string = ''): string {
+  // The API's explicit animated upload preserves all frames; a sized avatar route can serve a static PNG.
+  const animated: string = avatarImageUrl(animatedAvatar);
+  if (animated && /\.(gif|webp)$/i.test(animated.split(/[?#]/)[0])) { return animated; }
+  return avatarImageUrl(template.replace('{size}', String(size)));
 }
 
 export function flattenCategories(categories: Category[]): Category[] {

@@ -1,0 +1,23 @@
+[package]
+name = "linuxdo-ech-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+
+[lib]
+name = "ech_probe_core"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+rustls = { version = "=0.23.45", default-features = false, features = ["std", "aws_lc_rs", "tls12"] }
+webpki-roots = "1"
+hickory-proto = { version = "=0.26.3", default-features = false, features = ["std"] }
+serde_json = "1"
+base64 = "0.22"
+httparse = "1"
+chunked_transfer = "1"
+
+[profile.release]
+strip = true
+lto = "thin"

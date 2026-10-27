@@ -102,11 +102,11 @@ test('EntryAbility starts in foreground and stops on background, stage destructi
   const events = [];
   const exports = load(source('entryability/EntryAbility'), {
     UIAbility: class {}, handednessState: { start: () => events.push('start'), stop: () => events.push('stop') },
-    hilog: { info() {} }
+    hilog: { info() {} }, forumApi: { setForeground: active => events.push(active ? 'network-foreground' : 'network-background') }
   });
   const ability = new exports.default();
   ability.onForeground(); ability.onBackground(); ability.onWindowStageDestroy(); ability.onDestroy();
-  assert.deepEqual(events, ['start', 'stop', 'stop', 'stop']);
+  assert.deepEqual(events, ['network-foreground', 'start', 'network-background', 'stop', 'stop', 'stop']);
 });
 
 test('diagnostic status reports current real callback separately from a retained button side', () => {

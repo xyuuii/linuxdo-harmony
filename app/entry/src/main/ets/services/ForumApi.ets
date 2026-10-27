@@ -1,6 +1,7 @@
 import { http } from '@kit.NetworkKit';
 import { webview } from '@kit.ArkWeb';
 import { BusinessError } from '@kit.BasicServicesKit';
+import { url as urlUtils } from '@kit.ArkTS';
 import {
   Topic, Category, DiscourseUser, Post, Boost, TopicDetail, TopicListItem, TopicPage, TopicFeedFilter,
   SearchPage, SearchOrder, NotificationFilter, ForumNotification, NotificationPage, UnreadSummary,
@@ -44,6 +45,8 @@ export class ForumApiError extends Error {
     this.backupEnabled = backupEnabled;
   }
 }
+export const READ_SESSION_RECOVERY_TIMEOUT_MS: number = 25000;
+
 export class RequestCancellation {
   private cancelled: boolean = false;
   private handlers: Set<() => void> = new Set<() => void>();
@@ -61,7 +64,10 @@ export class RequestCancellation {
 }
 export interface BrowserRequest { path: string; method: string; body: string; csrf: string; }
 export interface BrowserResponse { status: number; body: string; headers: Record<string, string>; }
+export interface BrowserMediaResponse { status: number; bytes: ArrayBuffer; headers: Record<string, string>; }
 export type BrowserRequestTransport = (request: BrowserRequest, cancellation?: RequestCancellation) => Promise<BrowserResponse>;
+export type BrowserMediaTransport = (url: string, cancellation: RequestCancellation) => Promise<BrowserMediaResponse>;
+export type BrowserSessionRecovery = (cancellation: RequestCancellation) => Promise<boolean>;
 type ResponseHeaderValue = string | string[];
 interface RequestSpec { path: string; method: http.RequestMethod; body?: string; csrf?: string;
   multipart?: http.MultiFormData[]; cancellation?: RequestCancellation; }
@@ -97,13 +103,36 @@ function serverValidationMessage(raw: string): string {
     return plainText(errors.join('；') || text(response.error)).slice(0, 600);
   } catch { return ''; }
 }
+
+/** Emoji catalog URLs are image sources, not destinations for authenticated API calls. */
+export function emojiImageUrl(value: string): string {
+  if (!value || /[\u0000-\u0020\u007f\\]/.test(value)) { return ''; }
+  try {
+    const parsed: urlUtils.URL = new urlUtils.URL(value, FORUM_ORIGIN);
+    if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password ||
+      (parsed.port && parsed.port !== '443')) { return ''; }
+    parsed.hash = '';
+    return parsed.href;
+  } catch { return ''; }
+}
+
 export class ForumApi {
   private categoryCache: Category[] | undefined = undefined;
   private categoryInFlight: Promise<Category[]> | undefined = undefined;
+  private emojiCache: Map<string, string> | undefined = undefined;
+  private emojiInFlight: Promise<Map<string, string>> | undefined = undefined;
   private activeRequests: Set<() => void> = new Set<() => void>();
   private nextRequestAt: number = 0;
   private browserTransport: BrowserRequestTransport | undefined = undefined;
+  private browserMediaTransport: BrowserMediaTransport | undefined = undefined;
   private browserTransportEnabled: boolean = false;
+  private browserRecovery: BrowserSessionRecovery | undefined = undefined;
+  private recoveryTask: Promise<boolean> | undefined = undefined;
+  private recoveryCancellation: RequestCancellation | undefined = undefined;
+  private nextRecoveryAt: number = 0;
+  private recoveryVersion: number = 0;
+  private writesInFlight: number = 0;
+  private foreground: boolean = true;
   private userAgent: string = '';
   private sessionGeneration: number = 0;
   private sessionResetHandlers: Set<() => void> = new Set<() => void>();
@@ -118,17 +147,100 @@ export class ForumApi {
     return this.userAgent;
   }
   registerBrowserTransport(transport: BrowserRequestTransport): void { this.browserTransport = transport; }
+  registerBrowserMediaTransport(transport: BrowserMediaTransport): void { this.browserMediaTransport = transport; }
+  canUseBrowserMedia(): boolean { return this.browserTransportEnabled && this.browserMediaTransport !== undefined; }
+  getReadRecoveryVersion(): number { return this.recoveryVersion; }
+  async requestBrowserMedia(url: string, cancellation: RequestCancellation): Promise<BrowserMediaResponse> {
+    const generation: number = this.sessionGeneration;
+    const cancel: () => void = (): void => cancellation.cancel();
+    this.activeRequests.add(cancel);
+    try {
+      if (this.recoveryTask !== undefined) { await this.waitForRecovery(this.recoveryTask, cancellation); }
+      this.ensureSessionGeneration(generation);
+      if (cancellation.isCancelled) { throw cancelledError(); }
+      const transport: BrowserMediaTransport | undefined = this.browserMediaTransport;
+      if (!this.browserTransportEnabled || !transport) {
+        throw new ForumApiError(ForumErrorKind.VerificationRequired, 0, '请先完成网页验证以加载图片');
+      }
+      const response: BrowserMediaResponse = await transport(url, cancellation);
+      this.ensureSessionGeneration(generation);
+      if (cancellation.isCancelled) { throw cancelledError(); }
+      return response;
+    } finally { this.activeRequests.delete(cancel); }
+  }
+  registerBrowserRecovery(recovery: BrowserSessionRecovery | undefined): void {
+    this.cancelSessionRecovery();
+    this.browserRecovery = recovery;
+    this.nextRecoveryAt = 0;
+  }
+  cancelSessionRecovery(): void {
+    this.recoveryCancellation?.cancel();
+    this.recoveryCancellation = undefined;
+    this.recoveryTask = undefined;
+  }
+  setForeground(active: boolean): void {
+    this.foreground = active;
+    if (!active) { this.cancelSessionRecovery(); }
+  }
   setBrowserTransportEnabled(enabled: boolean): void { this.browserTransportEnabled = enabled; }
   dispose(): void {
+    this.cancelSessionRecovery();
     this.activeRequests.forEach((cancel: () => void): void => cancel());
     this.activeRequests.clear();
     this.nextRequestAt = 0;
   }
+
+  private async waitForRecovery(task: Promise<boolean>, cancellation: RequestCancellation): Promise<boolean> {
+    if (cancellation.isCancelled) { throw cancelledError(); }
+    let handler: () => void = (): void => {};
+    try {
+      return await new Promise<boolean>((resolve: (value: boolean) => void, reject: (error: ForumApiError) => void): void => {
+        handler = (): void => reject(cancelledError());
+        cancellation.onCancel(handler);
+        task.then(resolve).catch(() => resolve(false));
+      });
+    } finally { cancellation.offCancel(handler); }
+  }
+
+  /** Share one bounded browser recovery across API and image reads. Never replay a write. */
+  async recoverReadSession(cancellation: RequestCancellation): Promise<boolean> {
+    if (cancellation.isCancelled) { throw cancelledError(); }
+    if (this.recoveryTask !== undefined) { return this.waitForRecovery(this.recoveryTask, cancellation); }
+    if (!this.foreground || !this.browserRecovery || this.writesInFlight > 0 || Date.now() < this.nextRecoveryAt) { return false; }
+    const recovery: BrowserSessionRecovery = this.browserRecovery;
+    const generation: number = this.sessionGeneration;
+    const token: RequestCancellation = new RequestCancellation();
+    this.recoveryCancellation = token;
+    this.nextRecoveryAt = Date.now() + 30000;
+    // Install the task before invoking the handler so concurrent requests join it.
+    const task: Promise<boolean> = Promise.resolve().then(async (): Promise<boolean> => {
+      const timer: number = setTimeout((): void => { token.cancel(); }, READ_SESSION_RECOVERY_TIMEOUT_MS);
+      try {
+        const recovered: boolean = await this.waitForRecovery(recovery(token), token);
+        if (!recovered || token.isCancelled || generation !== this.sessionGeneration) { return false; }
+        this.browserTransportEnabled = true;
+        this.recoveryVersion++;
+        return true;
+      } catch { return false; }
+      finally {
+        clearTimeout(timer);
+        if (this.recoveryCancellation === token) {
+          this.recoveryCancellation = undefined;
+          this.recoveryTask = undefined;
+        }
+      }
+    });
+    this.recoveryTask = task;
+    return this.waitForRecovery(task, cancellation);
+  }
   resetSessionContext(): void {
     this.sessionGeneration++;
     this.dispose();
+    this.nextRecoveryAt = 0;
     this.categoryCache = undefined;
     this.categoryInFlight = undefined;
+    this.emojiCache = undefined;
+    this.emojiInFlight = undefined;
     this.sessionResetHandlers.forEach((handler: () => void): void => handler());
   }
   getSessionGeneration(): number { return this.sessionGeneration; }
@@ -241,6 +353,11 @@ export class ForumApi {
         for (const cookie of values) {
           if (cookie.trim().length > 0) { webview.WebCookieManager.configCookieSync(url, cookie.trim(), false, true); }
         }
+        if (values.some((cookie: string): boolean => /^\s*(?:_t|_forum_session|cf_clearance)=/.test(cookie))) {
+          // ArkWeb normally flushes every 30 seconds; persist important rotations before a quick app exit.
+          try { await webview.WebCookieManager.saveCookieAsync(); }
+          catch { /* Persistence failure must not turn a completed write into a retryable failure. */ }
+        }
       }
       if (typeof response.result !== 'string') { throw new ForumApiError(ForumErrorKind.InvalidResponse, response.responseCode, '社区响应格式不正确'); }
       return { status: response.responseCode, body: response.result, headers: normalizedHeaders };
@@ -290,18 +407,43 @@ export class ForumApi {
     this.activeRequests.add(cancel);
     try {
       await this.waitForSlot(cancellation);
+      if (this.recoveryTask !== undefined) { await this.waitForRecovery(this.recoveryTask, cancellation); }
       this.ensureSessionGeneration(generation);
       if (cancellation.isCancelled) { throw cancelledError(); }
-      let response: BrowserResponse;
-      if (this.browserTransportEnabled && this.browserTransport && !spec.multipart) {
-        response = await this.browserTransport({ path: spec.path, method: spec.method,
-          body: spec.body ?? '', csrf: spec.csrf ?? '' }, cancellation);
-      } else { response = await this.nativeRequest(spec); }
-      this.ensureSessionGeneration(generation);
-      if (cancellation.isCancelled) { throw cancelledError(); }
-      this.checkResponse(response, spec.method !== http.RequestMethod.GET);
-      return response.body;
+      const recoveredBeforeRequest: number = this.recoveryVersion;
+      try { return await this.sendRequest(spec, generation, cancellation); }
+      catch (error) {
+        if (!(error instanceof ForumApiError)) {
+          const reading: boolean = spec.method === http.RequestMethod.GET;
+          throw new ForumApiError(reading ? ForumErrorKind.Network : ForumErrorKind.UnknownResult, 0,
+            reading ? '社区请求未完成，请稍后重试' : '提交结果未确认，请刷新后检查，避免重复提交');
+        }
+        if (error.kind !== ForumErrorKind.VerificationRequired || spec.method !== http.RequestMethod.GET) { throw error; }
+        // Another read may have restored this context while the old response was still in flight.
+        if ((!this.browserTransportEnabled || this.recoveryVersion === recoveredBeforeRequest) &&
+          !await this.recoverReadSession(cancellation)) { throw error; }
+        this.ensureSessionGeneration(generation);
+        await this.waitForSlot(cancellation);
+        this.ensureSessionGeneration(generation);
+        if (cancellation.isCancelled) { throw cancelledError(); }
+        // Exactly one replay, using the verified browser context. No recursive retries.
+        return await this.sendRequest(spec, generation, cancellation);
+      }
     } finally { this.activeRequests.delete(cancel); }
+  }
+
+  private async sendRequest(spec: RequestSpec, generation: number, cancellation: RequestCancellation): Promise<string> {
+    const writing: boolean = spec.method !== http.RequestMethod.GET;
+    if (writing) { this.writesInFlight++; }
+    try {
+      const response: BrowserResponse = this.browserTransportEnabled && this.browserTransport && !spec.multipart ?
+        await this.browserTransport({ path: spec.path, method: spec.method, body: spec.body ?? '', csrf: spec.csrf ?? '' }, cancellation) :
+        await this.nativeRequest(spec);
+      this.ensureSessionGeneration(generation);
+      if (cancellation.isCancelled) { throw cancelledError(); }
+      this.checkResponse(response, writing);
+      return response.body;
+    } finally { if (writing) { this.writesInFlight--; } }
   }
   private async get(path: string, cancellation?: RequestCancellation): Promise<string> {
     return this.request({ path: path, method: http.RequestMethod.GET, cancellation: cancellation });
@@ -794,11 +936,33 @@ export class ForumApi {
     return { fields: [], entries: entries, hasMore: actions.length >= 30, nextCursor: cursor + 1 };
   }
   async emojiUrls(cancellation?: RequestCancellation): Promise<Map<string, string>> {
+    const generation: number = this.sessionGeneration;
+    if (cancellation?.isCancelled) { throw cancelledError(); }
+    if (this.emojiCache) { return new Map<string, string>(this.emojiCache); }
+    if (this.emojiInFlight && !cancellation) {
+      const shared: Map<string, string> = await this.emojiInFlight;
+      this.ensureSessionGeneration(generation);
+      return new Map<string, string>(shared);
+    }
+    const operation: Promise<Map<string, string>> = this.loadEmojiUrls(cancellation);
+    if (!cancellation) { this.emojiInFlight = operation; }
+    try {
+      const result: Map<string, string> = await operation;
+      this.ensureSessionGeneration(generation);
+      if (cancellation?.isCancelled) { throw cancelledError(); }
+      return new Map<string, string>(result);
+    }
+    finally { if (this.emojiInFlight === operation) { this.emojiInFlight = undefined; } }
+  }
+  private async loadEmojiUrls(cancellation?: RequestCancellation): Promise<Map<string, string>> {
+    const generation: number = this.sessionGeneration;
     const raw: string = await this.get('/emojis.json', cancellation);
+    this.ensureSessionGeneration(generation);
+    if (cancellation?.isCancelled) { throw cancelledError(); }
     const result: Map<string, string> = new Map<string, string>();
     const add: (emoji: EmojiWire) => void = (emoji: EmojiWire): void => {
       const name: string = text(emoji.name) || text(emoji.id);
-      const url: string = safeForumUrl(text(emoji.url));
+      const url: string = emojiImageUrl(text(emoji.url));
       if (name && url) { result.set(name, url); }
     };
     if (raw.trim().startsWith('[')) { decodeArray<EmojiWire>(raw).forEach(add); }
@@ -806,6 +970,7 @@ export class ForumApi {
       const groups: Record<string, EmojiWire[]> = this.parse<Record<string, EmojiWire[]>>(raw);
       Object.keys(groups).forEach((key: string): void => { list(groups[key]).forEach(add); });
     }
+    this.emojiCache = result;
     return result;
   }
 }

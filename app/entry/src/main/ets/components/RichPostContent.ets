@@ -25,6 +25,7 @@ export interface PostBlock {
   heading: boolean;
   imageWidth: number;
   imageHeight: number;
+  imageDisplayWidth?: number;
   codeLanguage?: string;
 }
 
@@ -154,14 +155,18 @@ export function parsePostContent(cooked: string): PostBlock[] {
       continue;
     }
     if (tag === 'img' && !closing) {
-      let imageUrl: string = postContentUrl(attribute(token, 'src'));
+      const sourceUrl: string = postContentUrl(attribute(token, 'src'));
+      let imageUrl: string = sourceUrl;
       const srcset: string[] = attribute(token, 'srcset').split(',');
       if (srcset.length > 0) {
         const last: string = postContentUrl(srcset[srcset.length - 1].trim().split(/\s+/)[0]);
         if (last) { imageUrl = last; }
       }
       const classes: string[] = decodePostEntities(attribute(token, 'class')).toLowerCase().split(/\s+/);
-      const emoji: boolean = classes.includes('emoji') || classes.includes('emoji-custom');
+      // Some cooked/imported posts omit the class on built-in emoji. Recognize
+      // the forum's dedicated path, never a filename or an arbitrary small image.
+      const emoji: boolean = classes.includes('emoji') || classes.includes('emoji-custom') ||
+        /^https:\/\/(?:www\.)?linux\.do(?::443)?\/images\/emoji\//i.test(sourceUrl);
       const width: number = Number(attribute(token, 'width'));
       const height: number = Number(attribute(token, 'height'));
       // Discourse onebox headers use a 32 px site icon, separate from their large thumbnail.
@@ -180,7 +185,8 @@ export function parsePostContent(cooked: string): PostBlock[] {
         blocks.push({ key: `block-${blocks.length}`, kind: 'image', runs: [], quote: quoteDepth > 0,
           url: original, description: alt, heading: false,
           imageWidth: hasOriginalSize ? originalWidth : Number.isFinite(width) && width > 0 ? width : 0,
-          imageHeight: hasOriginalSize ? originalHeight : Number.isFinite(height) && height > 0 ? height : 0 });
+          imageHeight: hasOriginalSize ? originalHeight : Number.isFinite(height) && height > 0 ? height : 0,
+          imageDisplayWidth: Number.isFinite(width) && width > 0 ? width : 0 });
       } else { append(alt); }
       continue;
     }
@@ -231,18 +237,24 @@ export function parsePostContent(cooked: string): PostBlock[] {
 }
 
 export interface PostImageLayout {
+  previewWidth: number;
   previewHeight: number;
   imageHeight: number;
   cropped: boolean;
 }
 
-/** Match the actual body width instead of squeezing every picture into a square. */
-export function postImageLayout(width: number, height: number, availableWidth: number, compact: boolean): PostImageLayout {
+/** Fit large pictures to the body while preserving the author's small image size. */
+export function postImageLayout(width: number, height: number, availableWidth: number, compact: boolean,
+  displayWidth: number = 0): PostImageLayout {
   const bodyWidth: number = Number.isFinite(availableWidth) && availableWidth > 0 ? availableWidth : 320;
   const ratio: number = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 ? width / height : 4 / 3;
-  const imageHeight: number = bodyWidth / ratio;
+  const preferredWidth: number = Number.isFinite(displayWidth) && displayWidth > 0 ? displayWidth :
+    Number.isFinite(width) && width > 0 ? width : bodyWidth;
+  const previewWidth: number = Math.min(bodyWidth, preferredWidth);
+  const imageHeight: number = previewWidth / ratio;
   const limit: number = bodyWidth * (compact ? 1 : 2);
-  return { previewHeight: Math.min(imageHeight, limit), imageHeight: imageHeight, cropped: imageHeight > limit };
+  return { previewWidth: previewWidth, previewHeight: Math.min(imageHeight, limit),
+    imageHeight: imageHeight, cropped: imageHeight > limit };
 }
 
 @ComponentV2
@@ -251,6 +263,7 @@ struct PostContentImage {
   @Param description: string = '';
   @Param sourceWidth: number = 0;
   @Param sourceHeight: number = 0;
+  @Param displayWidth: number = 0;
   @Param compact: boolean = false;
   @Param ownerId: number = 0;
   @Event onPicture: (url: string) => void = (_url: string): void => {};
@@ -266,34 +279,36 @@ struct PostContentImage {
   @Computed
   get imageLayout(): PostImageLayout {
     return postImageLayout(this.naturalWidth || this.sourceWidth, this.naturalHeight || this.sourceHeight,
-      this.bodyWidth, this.compact);
+      this.bodyWidth, this.compact, this.displayWidth);
   }
 
   build() {
-    Stack({ alignContent: Alignment.TopStart }) {
-      NativeForumImage({ url: this.url, fit: ImageFit.Contain, previewImageAspectRatio: 0,
-        accessibleLabel: this.description || '帖子图片', ownerId: this.ownerId,
-        onNaturalSize: (width: number, height: number): void => {
-          if (this.naturalWidth !== width || this.naturalHeight !== height) {
-            this.naturalWidth = width;
-            this.naturalHeight = height;
-          }
-        } })
-        .width('100%').height(this.imageLayout.imageHeight)
-      if (this.imageLayout.cropped) {
-        Row() {
-          Text('长图 · 点击查看完整图片').fontSize(12).fontColor(Color.White).padding({ left: 12, right: 12 })
-        }.width('100%').height(30).backgroundColor('#99000000')
-          .position({ x: 0, y: this.imageLayout.previewHeight - 30 })
-      }
-    }.width('100%').height(this.imageLayout.previewHeight).clip(true).borderRadius(8)
-      .backgroundColor($r('app.color.selected_background'))
-      .accessibilityText((this.description ? this.description + '，' : '') + '点击查看大图')
+    Column() {
+      Stack({ alignContent: Alignment.TopStart }) {
+        NativeForumImage({ url: this.url, fit: ImageFit.Contain, previewImageAspectRatio: 0,
+          accessibleLabel: this.description || '帖子图片', ownerId: this.ownerId,
+          onNaturalSize: (width: number, height: number): void => {
+            if (this.naturalWidth !== width || this.naturalHeight !== height) {
+              this.naturalWidth = width;
+              this.naturalHeight = height;
+            }
+          } })
+          .width('100%').height(this.imageLayout.imageHeight)
+        if (this.imageLayout.cropped) {
+          Row() {
+            Text('长图 · 点击查看完整图片').fontSize(12).fontColor(Color.White).padding({ left: 12, right: 12 })
+          }.width('100%').height(30).backgroundColor('#99000000')
+            .position({ x: 0, y: this.imageLayout.previewHeight - 30 })
+        }
+      }.width(this.imageLayout.previewWidth).height(this.imageLayout.previewHeight).clip(true).borderRadius(8)
+        .backgroundColor($r('app.color.selected_background'))
+        .accessibilityText((this.description ? this.description + '，' : '') + '点击查看大图')
+        .onClick((): void => this.onPicture(this.url))
+    }.width('100%').alignItems(HorizontalAlign.Start)
       .onAreaChange((_oldArea: Area, newArea: Area): void => {
         const width: number = Number(newArea.width);
         if (Number.isFinite(width) && width > 0 && Math.abs(this.bodyWidth - width) > 0.5) { this.bodyWidth = width; }
       })
-      .onClick((): void => this.onPicture(this.url))
   }
 }
 
@@ -336,15 +351,16 @@ export struct RichPostContent {
     const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
     try {
       for (const url of urls) {
-        const uri: string = await loadForumMedia(url, context, cancellation);
+        let uri: string = '';
+        try { uri = await loadForumMedia(url, context, cancellation); }
+        catch { /* Keep this alt readable and continue loading the other emoji. */ }
         if (this.emojiRequest !== cancellation || cancellation.isCancelled ||
           owner !== (this.session.user?.id || 0) || revision !== this.session.revision) { return; }
+        if (!uri) { continue; }
         const updated: Map<string, string> = new Map<string, string>(this.emojiUris);
         updated.set(url, uri);
         this.emojiUris = updated;
       }
-    } catch {
-      // The original alt text remains readable when a custom emoji cannot load.
     } finally { if (this.emojiRequest === cancellation) { this.emojiRequest = undefined; } }
   }
 
@@ -359,6 +375,7 @@ export struct RichPostContent {
         } else if (block.kind === 'image') {
           PostContentImage({ url: block.url, description: block.description,
             sourceWidth: block.imageWidth, sourceHeight: block.imageHeight,
+            displayWidth: block.imageDisplayWidth || 0,
             compact: this.compact, ownerId: this.session.user?.id || 0,
             onPicture: (url: string): void => this.onPicture(url) }).width('100%')
         } else {
@@ -374,6 +391,7 @@ export struct RichPostContent {
                 ImageSpan(this.emojiUris.get(run.emojiUrl) || '')
                   .width(this.inlineContent ? 16 : this.compact ? 18 : 22)
                   .height(this.inlineContent ? 16 : this.compact ? 18 : 22)
+                  .objectFit(ImageFit.Contain)
                   .verticalAlign(ImageSpanAlignment.CENTER)
               } else {
                 Span(run.text)

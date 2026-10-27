@@ -126,6 +126,7 @@ export struct ProfilePage {
               Text('关于与连接诊断').fontSize(16).fontColor($r('app.color.text_primary')).layoutWeight(1)
               SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([$r('app.color.text_secondary')])
             }.width('100%').padding({ left: 16, right: 16 }).height(56).onClick(() => { this.onDiagnostics(); })
+              .id('profile_diagnostics')
           }.width('100%').backgroundColor($r('app.color.surface')).borderRadius(18)
         }.width('100%').alignItems(HorizontalAlign.Start)
         if (forumSession.user !== undefined) {
