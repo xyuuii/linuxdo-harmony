@@ -1,5 +1,6 @@
 import { PersistenceV2 } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { defaultTopicFeedIndex, defaultTopicFeedValue } from '../services/ReadingPreferences';
 
 const APPEARANCE_STORAGE_KEY: string = 'appearance_settings_v1';
 const LOG_DOMAIN: number = 0x0000;
@@ -13,6 +14,9 @@ export class AppearanceSettings {
   @Trace themeMode: number = 0;
   @Trace treeView: boolean = true;
   @Trace autoRefresh: boolean = false;
+  @Trace defaultFeed: string = 'latest';
+  @Trace immersiveTopics: boolean = false;
+  @Trace openAtUnread: boolean = true;
 }
 
 // Runtime storage status is separate from the persisted preferences.
@@ -53,6 +57,9 @@ function validateSettings(settings: AppearanceSettings): void {
   }
   if (typeof settings.treeView !== 'boolean') { settings.treeView = true; }
   if (typeof settings.autoRefresh !== 'boolean') { settings.autoRefresh = false; }
+  settings.defaultFeed = defaultTopicFeedValue(defaultTopicFeedIndex(settings.defaultFeed));
+  if (typeof settings.immersiveTopics !== 'boolean') { settings.immersiveTopics = false; }
+  if (typeof settings.openAtUnread !== 'boolean') { settings.openAtUnread = true; }
 }
 
 /**

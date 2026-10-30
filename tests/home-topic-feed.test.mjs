@@ -27,6 +27,7 @@ function load(value, bindings = {}) {
 }
 
 const models = load(source('models/ForumModels'));
+const readingPreferences = load(source('services/ReadingPreferences').replace(/^import .*;\n/gm, ''), models);
 const feedSource = source('components/HomeTopicFeed');
 const start = feedSource.indexOf('@ObservedV2\nclass HomeFeedPage');
 const end = feedSource.indexOf('  @LocalBuilder', start);
@@ -44,6 +45,7 @@ function runtime({ active = true, mounted = true, reduceMotion = false } = {}) {
   const reads = [];
   const exported = load(feedClass, {
     topicFeedFilters: models.topicFeedFilters,
+    defaultTopicFeedIndex: readingPreferences.defaultTopicFeedIndex,
     AppearanceSettings: class { reduceMotion = reduceMotion; },
     Scroller: class {
       offset = 0;
@@ -238,4 +240,28 @@ test('inactive and unmounted pager scroll callbacks neither read native scroll s
     assert.deepEqual(reads, []);
     assert.equal(feed.pages[2].scroller.reads, 0);
   }
+});
+
+test('configured default feed is applied once and returning home preserves the selected list', () => {
+  const { feed } = runtime({ mounted: false });
+  feed.appearance.defaultFeed = 'unread';
+  feed.appear();
+  assert.equal(feed.filterIndex, 2);
+  assert.equal(feed.targetIndex, 2);
+  feed.pageChanged(4);
+  feed.mounted = false;
+  feed.appear();
+  assert.equal(feed.filterIndex, 4);
+});
+
+test('switching account discards private taxonomy names and scope without resetting the selected feed', () => {
+  const { feed } = runtime();
+  Object.assign(feed, { selectedCategoryId: 123, selectedCategoryName: 'Fixture private category',
+    selectedTag: 'fixture-private-tag', showTaxonomy: true, filterIndex: 2, targetIndex: 2 });
+  feed.accountChanged();
+  assert.equal(feed.selectedCategoryId, 0);
+  assert.equal(feed.selectedCategoryName, '');
+  assert.equal(feed.selectedTag, '');
+  assert.equal(feed.showTaxonomy, false);
+  assert.equal(feed.filterIndex, 2);
 });

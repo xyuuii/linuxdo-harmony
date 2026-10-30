@@ -17,12 +17,16 @@ DevEco CLI 生成的 `EntryAbility.ets` 和 `EntryBackupAbility.ets` 保留 Huaw
 
 HarmonyOS SDK、HDS/ArkUI 系统组件、DevEco Studio 与 DevEco CLI 不随仓库分发，需要开发者自行安装并遵守各自使用条款。测试可以调用已安装的 TypeScript 编译运行时；CI 仅安装公开 TypeScript 4.9.5 执行离线逻辑 fixture，不分发 Huawei SDK。
 
+## 阅读操作图标
+
+`ic_more_horiz.svg` 和 `ic_boost_rocket.svg` 来自 Google [Material Design Icons / Material Symbols](https://github.com/google/material-design-icons)，分别使用 `more_horiz` 和 `rocket_launch` 的 outlined 24px 原始 SVG，仅由 ArkUI 按主题着色。采用 Apache-2.0；完整原文随 HAP 内嵌于 `resources/rawfile/MATERIAL_SYMBOLS_LICENSE.txt`。
+
 ## ECH 可行性原型
 
-`experiments/ech-probe/` 是独立的开源 TLS 验证代码，使用 Rustls 0.23.45 / AWS-LC、WebPKI roots、Hickory protocol 0.26.3、httparse、chunked-transfer、base64 和 serde_json；精确版本与校验和见该目录 Cargo.lock。v0.3.1 另附开发调试签名的 edge DoH/ECH 试验 HAP，其中 Rustls 库用于诊断，业务请求仍经 ArkWeb，不作为普通版网络层发布。锁定依赖、AWS-LC 内含第三方代码及 SDK 提供的 libc++ 运行库的许可/归属原文汇总见 [THIRD_PARTY_LICENSES.txt](experiments/ech-probe/THIRD_PARTY_LICENSES.txt)，同时随试验 HAP 内嵌并作为 Release 附件提供。
+`experiments/ech-probe/` 是独立的开源 TLS 验证代码，使用 Rustls 0.23.45 / AWS-LC、WebPKI roots、Hickory protocol 0.26.3、httparse、chunked-transfer、base64 和 serde_json；精确版本与校验和见该目录 Cargo.lock。v0.3.1 起另附开发调试签名的 edge DoH/ECH 试验 HAP，其中 Rustls 库用于诊断，业务请求仍经 ArkWeb，不作为普通版网络层发布。锁定依赖、AWS-LC 内含第三方代码及 SDK 提供的 libc++ 运行库的许可/归属原文汇总见 [THIRD_PARTY_LICENSES.txt](experiments/ech-probe/THIRD_PARTY_LICENSES.txt)，同时随试验 HAP 内嵌并作为 Release 附件提供。
 
 原型读取了 Android 项目提交 `a7e6c81bccee1eec8f75542a91fcd6c0f24e11b5` 的公开 DoH 预设地址作为连接对照；没有复用、移植或分发其闭源 AAR / native 库。实现与复现入口见 [实验说明](experiments/ech-probe/README.md)。
 
 ## 名称与内容
 
-这是社区开发的第三方客户端。LINUX DO、HarmonyOS、Huawei 名称，以及论坛内容与账号，归对应权利人；本仓库的软件许可不授予品牌或论坛内容许可。公开截图展示本应用首页、分类、公开帖子、空白编辑器及外观设置；论坛内容仅用于说明客户端呈现效果，权利仍归原作者。截图不包含登录信息、私信或账号资料。
+这是社区开发的第三方客户端。LINUX DO、HarmonyOS、Huawei 名称，以及论坛内容与账号，归对应权利人；本仓库的软件许可不授予品牌或论坛内容许可。公开截图展示本应用首页、目录、搜索筛选、公开帖子、空白编辑器、功能入口及外观设置；论坛内容仅用于说明客户端呈现效果，权利仍归原作者。截图不包含登录信息、私信或账号资料。

@@ -14,6 +14,10 @@ const MAX_SERIALIZED_CHARS: number = 12 * 1024 * 1024;
 const MAX_REQUEST_CHARS: number = 1024 * 1024;
 const MAX_ACTIVE_REQUESTS: number = 8;
 const REQUEST_SLOT: string = '__linuxDoNativePendingFetches';
+const MAX_PREVIEW_RAW_CHARS: number = 65536;
+const MAX_PREVIEW_COOKED_CHARS: number = 262144;
+const MAX_PREVIEW_SERIALIZED_CHARS: number = 2 * 1024 * 1024;
+const PREVIEW_TIMEOUT_MS: number = 15000;
 
 interface BridgeHeaders {
   contentType?: string;
@@ -44,6 +48,16 @@ interface PendingMediaRequest {
   timer: number;
   cancellation: RequestCancellation;
   cancelHandler: () => void;
+}
+interface CookBridgeResult { type?: string; cooked?: string; error?: string; }
+interface PendingCookRequest {
+  resolve: (cooked: string) => void;
+  reject: (reason: ForumApiError) => void;
+  timer: number;
+  cancellation: RequestCancellation;
+  cancelHandler: () => void;
+  documentRevision: number;
+  navigationRevision: number;
 }
 
 /** The only page-callable method accepts the result of an existing native request. */
@@ -105,6 +119,7 @@ export class BrowserTransportAdapter {
   private controller: webview.WebviewController;
   private pending: Map<string, PendingRequest> = new Map<string, PendingRequest>();
   private mediaPending: Map<string, PendingMediaRequest> = new Map<string, PendingMediaRequest>();
+  private cookPending: Map<string, PendingCookRequest> = new Map<string, PendingCookRequest>();
   private disposed: boolean = false;
   private documentRevision: number = 0;
   private navigationRevision: number = 0;
@@ -130,12 +145,16 @@ export class BrowserTransportAdapter {
     // ArkWeb can deliver PageBegin after the corresponding commit notification.
     // Only an explicit load resets commit state; the revision invalidates in-flight probes.
     this.navigationRevision++;
+    this.cookPending.forEach((_entry: PendingCookRequest, id: string): void => this.failCook(id, cancelledError(), true));
     this.pending.forEach((entry: PendingRequest, id: string): void => {
       if (entry.request.method === 'GET') { this.fail(id, this.transportError(entry.request, false), false); }
     });
     this.mediaPending.forEach((_entry: PendingMediaRequest, id: string): void => this.failMedia(id, cancelledError(), true));
   }
-  pageCommitted(): void { this.documentRevision++; this.navigationCommitted = true; }
+  pageCommitted(): void {
+    this.documentRevision++; this.navigationCommitted = true;
+    this.cookPending.forEach((_entry: PendingCookRequest, id: string): void => this.failCook(id, cancelledError(), true));
+  }
   pageFailed(code: number): void {
     // ArkWeb's ERR_CONNECTION_RESET can leave an error document under the requested URL.
     if (code === -101) { this.navigationReset = true; }
@@ -168,10 +187,10 @@ export class BrowserTransportAdapter {
     const deadline: number = Date.now() + READ_SESSION_RECOVERY_TIMEOUT_MS;
     const drainDeadline: number = Math.min(deadline, Date.now() + 3000);
     // Navigating would destroy pending fetches, including possibly committed writes.
-    while (this.pending.size + this.mediaPending.size > 0 && !cancellation.isCancelled && Date.now() < drainDeadline) {
+    while (this.pending.size + this.mediaPending.size + this.cookPending.size > 0 && !cancellation.isCancelled && Date.now() < drainDeadline) {
       await this.recoveryPause(cancellation);
     }
-    if (this.disposed || cancellation.isCancelled || this.pending.size + this.mediaPending.size > 0) { return false; }
+    if (this.disposed || cancellation.isCancelled || this.pending.size + this.mediaPending.size + this.cookPending.size > 0) { return false; }
     const previousDocument: number = this.documentRevision;
     this.navigationCommitted = false;
     this.navigationReset = false;
@@ -183,7 +202,7 @@ export class BrowserTransportAdapter {
       await this.recoveryPause(cancellation);
       if (this.disposed || cancellation.isCancelled || Date.now() >= deadline) { return false; }
       if (this.navigationReset) {
-        if (retriedNavigation || this.pending.size + this.mediaPending.size > 0) { return false; }
+        if (retriedNavigation || this.pending.size + this.mediaPending.size + this.cookPending.size > 0) { return false; }
         retriedNavigation = true;
         this.navigationReset = false;
         this.navigationCommitted = false;
@@ -254,7 +273,7 @@ export class BrowserTransportAdapter {
       for (let index: number = 0; index < blob.data.length; index++) {
         value += blob.data[index].toString(16).padStart(2, '0');
       }
-      if (value.length !== 32 || this.pending.has(value) || this.mediaPending.has(value)) {
+      if (value.length !== 32 || this.pending.has(value) || this.mediaPending.has(value) || this.cookPending.has(value)) {
         throw new ForumApiError(ForumErrorKind.Network, 0, '无法创建网页请求');
       }
       return value;
@@ -273,7 +292,7 @@ export class BrowserTransportAdapter {
     if (!this.isTrustedPage()) {
       throw new ForumApiError(ForumErrorKind.VerificationRequired, 0, '请先在社区网页中完成验证');
     }
-    if (this.pending.size + this.mediaPending.size >= MAX_ACTIVE_REQUESTS) {
+    if (this.pending.size + this.mediaPending.size + this.cookPending.size >= MAX_ACTIVE_REQUESTS) {
       throw new ForumApiError(ForumErrorKind.Network, 0, '网页请求较多，请稍后重试');
     }
     let id: string = '';
@@ -286,7 +305,7 @@ export class BrowserTransportAdapter {
     if (!this.isTrustedPage()) {
       throw new ForumApiError(ForumErrorKind.VerificationRequired, 0, '网页会话已变化，请重新完成验证');
     }
-    if (this.pending.size + this.mediaPending.size >= MAX_ACTIVE_REQUESTS) {
+    if (this.pending.size + this.mediaPending.size + this.cookPending.size >= MAX_ACTIVE_REQUESTS) {
       throw new ForumApiError(ForumErrorKind.Network, 0, '网页请求较多，请稍后重试');
     }
 
@@ -355,6 +374,9 @@ export class BrowserTransportAdapter {
   }
 
   private receive(id: string, serialized: string): void {
+    if (!this.disposed && typeof id === 'string' && /^[0-9a-f]{32}$/.test(id) && this.cookPending.has(id)) {
+      this.receiveCook(id, serialized); return;
+    }
     if (!this.disposed && typeof id === 'string' && /^[0-9a-f]{32}$/.test(id) && this.mediaPending.has(id)) {
       this.receiveMedia(id, serialized); return;
     }
@@ -397,6 +419,118 @@ export class BrowserTransportAdapter {
     }
   }
 
+  /** Only the fixed official Discourse text module can cook this bounded raw text. */
+  async cookPreview(raw: string, cancellation: RequestCancellation): Promise<string> {
+    if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_PREVIEW_RAW_CHARS) {
+      throw new ForumApiError(ForumErrorKind.Rejected, 0, '预览内容为空或过长');
+    }
+    if (this.disposed || cancellation.isCancelled) { throw cancelledError(); }
+    if (!this.isTrustedPage()) { throw new ForumApiError(ForumErrorKind.VerificationRequired, 0, '请先完成社区网页验证，再重试预览'); }
+    const documentRevision: number = this.documentRevision;
+    const navigationRevision: number = this.navigationRevision;
+    const id: string = await this.requestToken();
+    if (this.disposed || cancellation.isCancelled || documentRevision !== this.documentRevision ||
+      navigationRevision !== this.navigationRevision) { throw cancelledError(); }
+    if (!this.isTrustedPage()) { throw new ForumApiError(ForumErrorKind.VerificationRequired, 0, '网页会话已变化，请重新完成验证'); }
+    if (this.pending.size + this.mediaPending.size + this.cookPending.size >= MAX_ACTIVE_REQUESTS) {
+      throw new ForumApiError(ForumErrorKind.Network, 0, '网页正在处理其他请求，请稍后重试预览');
+    }
+    return new Promise<string>((resolve: (cooked: string) => void, reject: (reason: ForumApiError) => void): void => {
+      const cancelHandler: () => void = (): void => this.failCook(id, cancelledError(), true);
+      const entry: PendingCookRequest = { resolve: resolve, reject: reject, timer: 0, cancellation: cancellation,
+        cancelHandler: cancelHandler, documentRevision: documentRevision, navigationRevision: navigationRevision };
+      this.cookPending.set(id, entry);
+      entry.timer = setTimeout((): void => this.failCook(id,
+        new ForumApiError(ForumErrorKind.Timeout, 0, '预览超时，请重试或返回编辑'), true), PREVIEW_TIMEOUT_MS);
+      cancellation.onCancel(cancelHandler);
+      if (!this.cookPending.has(id)) { return; }
+      try {
+        this.controller.runJavaScript(this.cookScript(id, raw)).then((result: string): void => {
+          if (result === 'wrong_origin' || result === '"wrong_origin"' || result === 'missing_bridge' || result === '"missing_bridge"') {
+            this.failCook(id, new ForumApiError(ForumErrorKind.VerificationRequired, 0, '社区网页尚未就绪，请完成验证后重试预览'), true);
+          } else if (result === 'unsupported' || result === '"unsupported"') {
+            this.failCook(id, new ForumApiError(ForumErrorKind.Unsupported, 0, '社区排版模块尚未就绪，请稍后重试或返回编辑'), false);
+          }
+        }).catch((): void => this.failCook(id, new ForumApiError(ForumErrorKind.Network, 0, '预览暂时无法生成，请重试或返回编辑'), true));
+      } catch { this.failCook(id, new ForumApiError(ForumErrorKind.Network, 0, '预览暂时无法生成，请重试或返回编辑'), true); }
+    });
+  }
+
+  private removeCook(id: string): PendingCookRequest | undefined {
+    const entry: PendingCookRequest | undefined = this.cookPending.get(id);
+    if (entry !== undefined) {
+      this.cookPending.delete(id); clearTimeout(entry.timer); entry.cancellation.offCancel(entry.cancelHandler);
+    }
+    return entry;
+  }
+
+  private failCook(id: string, error: ForumApiError, abort: boolean): void {
+    const entry: PendingCookRequest | undefined = this.removeCook(id);
+    if (entry === undefined) { return; }
+    if (abort) { this.abort(id); }
+    entry.reject(error);
+  }
+
+  private receiveCook(id: string, serialized: string): void {
+    const entry: PendingCookRequest | undefined = this.cookPending.get(id);
+    if (entry === undefined) { return; }
+    if (!this.isTrustedPage() || entry.documentRevision !== this.documentRevision ||
+      entry.navigationRevision !== this.navigationRevision || entry.cancellation.isCancelled) {
+      this.failCook(id, cancelledError(), true); return;
+    }
+    try {
+      if (typeof serialized !== 'string' || serialized.length > MAX_PREVIEW_SERIALIZED_CHARS) { throw new Error('Invalid preview'); }
+      const result: CookBridgeResult = JSON.parse(serialized) as CookBridgeResult;
+      if (result === null || typeof result !== 'object' || Array.isArray(result)) { throw new Error('Invalid preview'); }
+      if (result.type === 'cook_error') {
+        this.failCook(id, new ForumApiError(result.error === 'too_large' ? ForumErrorKind.InvalidResponse :
+          result.error === 'timeout' ? ForumErrorKind.Timeout : ForumErrorKind.Unsupported, 0,
+          result.error === 'too_large' ? '排版后的内容过长，无法完整预览' : result.error === 'timeout' ?
+            '预览超时，请重试或返回编辑' : '社区排版模块暂不可用，请重试或返回编辑'), true); return;
+      }
+      if (result.type !== 'cook' || typeof result.cooked !== 'string' || result.cooked.length > MAX_PREVIEW_COOKED_CHARS) {
+        throw new Error('Invalid preview');
+      }
+      this.removeCook(id)?.resolve(result.cooked);
+    } catch { this.failCook(id, new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区预览格式不正确，请返回编辑后重试'), true); }
+  }
+
+  private cookScript(id: string, raw: string): string {
+    return `(() => {
+      if (location.origin !== ${jsonLiteral(FORUM_ORIGIN)} || window !== window.top) return 'wrong_origin';
+      const bridge = window[${jsonLiteral(this.bridgeName)}];
+      if (!bridge || typeof bridge.receive !== 'function') return 'missing_bridge';
+      if (typeof window.require !== 'function' || typeof window.require.has !== 'function' ||
+          !window.require.has('discourse/lib/text')) return 'unsupported';
+      let textModule;
+      try { textModule = window.require('discourse/lib/text'); } catch { return 'unsupported'; }
+      if (!textModule || typeof textModule.generateCookFunction !== 'function') return 'unsupported';
+      const id = ${jsonLiteral(id)}, slot = ${jsonLiteral(REQUEST_SLOT)};
+      const active = window[slot] instanceof Map ? window[slot] : new Map(); window[slot] = active;
+      let stopped = false, timer = 0;
+      const control = { abort() { stopped = true; clearTimeout(timer); active.delete(id); } };
+      active.set(id, control);
+      const finish = result => {
+        if (stopped) return;
+        stopped = true; clearTimeout(timer); active.delete(id);
+        if (location.origin === ${jsonLiteral(FORUM_ORIGIN)} && window === window.top) bridge.receive(id, JSON.stringify(result));
+      };
+      timer = setTimeout(() => finish({ type: 'cook_error', error: 'timeout' }), ${PREVIEW_TIMEOUT_MS - 500});
+      (async () => {
+        try {
+          const cook = await textModule.generateCookFunction({ previewing: true });
+          if (stopped) return;
+          if (typeof cook !== 'function') { finish({ type: 'cook_error', error: 'unsupported' }); return; }
+          const cooked = cook(${jsonLiteral(raw)});
+          if (typeof cooked !== 'string') { finish({ type: 'cook_error', error: 'invalid' }); return; }
+          if (cooked.length > ${MAX_PREVIEW_COOKED_CHARS}) { finish({ type: 'cook_error', error: 'too_large' }); return; }
+          finish({ type: 'cook', cooked });
+        } catch { finish({ type: 'cook_error', error: 'failed' }); }
+      })();
+      return 'started';
+    })();`;
+  }
+
   async requestImage(url: string, cancellation: RequestCancellation): Promise<BrowserMediaResponse> {
     const destination: string = browserMediaUrl(url);
     if (!destination) { throw new ForumApiError(ForumErrorKind.Rejected, 0, '图片地址不支持网页加载'); }
@@ -405,7 +539,7 @@ export class BrowserTransportAdapter {
     const id: string = await this.requestToken();
     if (this.disposed || cancellation.isCancelled) { throw cancelledError(); }
     if (!this.isTrustedPage()) { throw new ForumApiError(ForumErrorKind.VerificationRequired, 0, '网页会话已变化，请重新验证'); }
-    if (this.pending.size + this.mediaPending.size >= MAX_ACTIVE_REQUESTS) {
+    if (this.pending.size + this.mediaPending.size + this.cookPending.size >= MAX_ACTIVE_REQUESTS) {
       throw new ForumApiError(ForumErrorKind.Network, 0, '网页图片请求较多，请稍后重试');
     }
     return new Promise<BrowserMediaResponse>((resolve, reject): void => {
@@ -587,6 +721,7 @@ export class BrowserTransportAdapter {
     this.disposed = true;
     this.pending.forEach((_entry: PendingRequest, id: string): void => { this.fail(id, cancelledError(), true); });
     this.mediaPending.forEach((_entry: PendingMediaRequest, id: string): void => { this.failMedia(id, cancelledError(), true); });
+    this.cookPending.forEach((_entry: PendingCookRequest, id: string): void => { this.failCook(id, cancelledError(), true); });
     try { this.controller.deleteJavaScriptRegister(this.bridgeName); }
     catch { /* The Web component may already have been released. */ }
   }

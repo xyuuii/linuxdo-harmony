@@ -27,6 +27,72 @@ export interface PostBlock {
   imageHeight: number;
   imageDisplayWidth?: number;
   codeLanguage?: string;
+  quoteGroupId?: string;
+  quoteLevel?: number;
+  quoteHeader?: PostQuoteHeader;
+}
+
+export interface PostQuoteHeader {
+  key: string; username: string; avatarUrl: string; href: string; postNumber: number;
+}
+export interface PostContentGroup {
+  key: string; quote: boolean; blocks: PostBlock[]; header?: PostQuoteHeader;
+}
+interface PostQuoteContext {
+  tag: string; groupId: string; level: number; header: PostQuoteHeader; titleSeen: boolean;
+}
+
+function postQuoteHeaderVisible(header: PostQuoteHeader | undefined): boolean {
+  return header !== undefined && (header.username.trim().length > 0 || header.avatarUrl.length > 0 ||
+    header.href.length > 0 || header.postNumber > 0);
+}
+
+/** Preserve flat blocks for image/gallery consumers; only native presentation groups them. */
+export function groupPostContent(blocks: PostBlock[]): PostContentGroup[] {
+  const groups: PostContentGroup[] = [];
+  blocks.forEach((block: PostBlock): void => {
+    const key: string = block.quote ? block.quoteGroupId || `quote-${block.key}` : block.key;
+    let group: PostContentGroup | undefined = groups[groups.length - 1];
+    if (group === undefined || !block.quote || !group.quote || group.key !== key) {
+      group = { key: key, quote: block.quote, blocks: [] }; groups.push(group);
+    }
+    if (block.kind === 'quote_header' && (block.quoteLevel ?? 1) <= 1) {
+      if (postQuoteHeaderVisible(block.quoteHeader)) { group.header = block.quoteHeader; }
+    } else if (block.kind !== 'quote_header' || postQuoteHeaderVisible(block.quoteHeader)) {
+      group.blocks.push(block);
+    }
+  });
+  return groups.filter((group: PostContentGroup): boolean => group.blocks.length > 0 || postQuoteHeaderVisible(group.header));
+}
+
+export function postQuoteCanCollapse(group: PostContentGroup): boolean {
+  return group.quote && (postQuoteHeaderVisible(group.header) || group.blocks.length > 3 ||
+    group.blocks.reduce((count: number, block: PostBlock): number => {
+      return count + block.runs.reduce((length: number, run: PostInline): number => length + run.text.length, 0);
+    }, 0) > 360);
+}
+
+export function visiblePostQuoteBlocks(group: PostContentGroup, collapsed: boolean): PostBlock[] {
+  return collapsed ? [] : group.blocks;
+}
+
+function postQuoteTarget(topic: string, post: string, href: string = ''): string {
+  const topicId: number = Number(topic);
+  const postNumber: number = Number(post);
+  if (Number.isSafeInteger(topicId) && topicId > 0 && Number.isSafeInteger(postNumber) && postNumber > 0) {
+    return `https://linux.do/t/${topicId}/${postNumber}`;
+  }
+  const candidate: string = postContentUrl(href);
+  return /^https:\/\/linux\.do\/t\/(?:[^/?#]+\/)?[1-9][0-9]*(?:\/[1-9][0-9]*)?\/?$/.test(candidate) ? candidate : '';
+}
+
+function emptyPostBlock(): PostBlock {
+  return { key: '', kind: 'paragraph', runs: [], quote: false, url: '', description: '', heading: false,
+    imageWidth: 0, imageHeight: 0 };
+}
+
+function emptyPostQuoteHeader(): PostQuoteHeader {
+  return { key: '', username: '', avatarUrl: '', href: '', postNumber: 0 };
 }
 
 interface InlineStyle {
@@ -98,7 +164,11 @@ export function parsePostContent(cooked: string): PostBlock[] {
   const excluded: string[] = [];
   let runs: PostInline[] = [];
   let quoteDepth: number = 0;
-  const quoteTags: string[] = [];
+  const quoteTags: PostQuoteContext[] = [];
+  let nextQuoteId: number = 0;
+  let titleContext: PostQuoteContext | undefined = undefined;
+  let titleDivDepth: number = 0;
+  let titleText: string = '';
   let preDepth: number = 0;
   let codeLanguage: string = '';
   let heading: boolean = false;
@@ -108,9 +178,17 @@ export function parsePostContent(cooked: string): PostBlock[] {
     if (runs.some((run: PostInline): boolean => run.text.trim().length > 0 || run.emojiUrl.length > 0)) {
       blocks.push({ key: `block-${blocks.length}`, kind: preDepth > 0 ? 'code' : 'paragraph',
         runs: runs, quote: quoteDepth > 0, url: '', description: '', heading: heading, imageWidth: 0, imageHeight: 0,
+        quoteGroupId: quoteTags[0]?.groupId ?? '', quoteLevel: quoteTags[quoteTags.length - 1]?.level ?? 0,
         codeLanguage: preDepth > 0 ? codeLanguage : '' });
     }
     runs = [];
+  };
+  const finishQuoteTitle = (): void => {
+    if (titleContext !== undefined) {
+      const label: string = titleText.replace(/\s+/g, ' ').trim().replace(/[:：]\s*$/, '');
+      if (label) { titleContext.header.username = label; }
+    }
+    titleContext = undefined; titleDivDepth = 0; titleText = '';
   };
   const append = (text: string, emojiUrl: string = ''): void => {
     const current: InlineStyle = styles[styles.length - 1];
@@ -127,7 +205,8 @@ export function parsePostContent(cooked: string): PostBlock[] {
     if (!token.startsWith('<') || token === '<') {
       if (excluded.length === 0) {
         const text: string = decodePostEntities(token);
-        append(preDepth > 0 ? text : text.replace(/[\t\r\n ]+/g, ' '));
+        if (titleContext !== undefined) { titleText += text; }
+        else { append(preDepth > 0 ? text : text.replace(/[\t\r\n ]+/g, ' ')); }
       }
       continue;
     }
@@ -137,7 +216,8 @@ export function parsePostContent(cooked: string): PostBlock[] {
     const tag: string = match[2].toLowerCase();
     const voidTag: boolean = /^(img|br|hr|input|meta|link|source|wbr)$/.test(tag) || /\/\s*>$/.test(token);
     const forbidden: boolean = /^(script|style|noscript|iframe|object|embed|svg|math|form|button|input|textarea)$/.test(tag);
-    const hidden: boolean = /(^|\s)(meta|filename|informations)(\s|$)/.test(attribute(token, 'class'));
+    const hidden: boolean = /(^|\s)(meta|filename|informations)(\s|$)/.test(attribute(token, 'class')) ||
+      (titleContext !== undefined && /(^|\s)quote-controls(\s|$)/.test(attribute(token, 'class')));
     if (excluded.length > 0) {
       if (closing && tag === excluded[excluded.length - 1]) { excluded.pop(); }
       else if (!closing && !voidTag && (forbidden || tag === excluded[excluded.length - 1])) { excluded.push(tag); }
@@ -147,10 +227,37 @@ export function parsePostContent(cooked: string): PostBlock[] {
       if (!voidTag) { excluded.push(tag); }
       continue;
     }
+    // A Discourse quote title is one semantic header, not body paragraphs or a gallery image.
+    // A malformed missing </div> must not consume the following blockquote body.
+    if (titleContext !== undefined && ((!closing && tag === 'blockquote') || (closing && tag === 'aside'))) {
+      finishQuoteTitle();
+    }
+    if (titleContext !== undefined) {
+      if (tag === 'div') {
+        titleDivDepth += closing ? -1 : 1;
+        if (titleDivDepth <= 0) { finishQuoteTitle(); }
+      } else if (tag === 'img' && !closing) {
+        const image: string = postContentUrl(attribute(token, 'src'));
+        const classes: string = attribute(token, 'class').toLowerCase();
+        if (!titleContext.header.avatarUrl && !/(^|\s)emoji(?:-custom)?(\s|$)/.test(classes) && image.startsWith('https://')) {
+          titleContext.header.avatarUrl = image;
+        }
+      } else if (tag === 'a' && !closing && !titleContext.header.href) {
+        titleContext.header.href = postQuoteTarget('', '', attribute(token, 'href'));
+      }
+      continue;
+    }
+    const activeQuote: PostQuoteContext | undefined = quoteTags[quoteTags.length - 1];
+    if (!closing && tag === 'div' && activeQuote?.tag === 'aside' && !activeQuote.titleSeen &&
+      /(^|\s)title(\s|$)/.test(attribute(token, 'class'))) {
+      flush(); activeQuote.titleSeen = true; titleContext = activeQuote; titleDivDepth = 1; titleText = '';
+      continue;
+    }
     if (tag === 'br') { append('\n'); continue; }
     if (tag === 'hr') {
       flush();
-      blocks.push({ key: `block-${blocks.length}`, kind: 'divider', runs: [], quote: false,
+      blocks.push({ key: `block-${blocks.length}`, kind: 'divider', runs: [], quote: quoteDepth > 0,
+        quoteGroupId: quoteTags[0]?.groupId ?? '', quoteLevel: quoteTags[quoteTags.length - 1]?.level ?? 0,
         url: '', description: '', heading: false, imageWidth: 0, imageHeight: 0 });
       continue;
     }
@@ -183,6 +290,7 @@ export function parsePostContent(cooked: string): PostBlock[] {
         const hasOriginalSize: boolean = originalWidth > 0 && originalHeight > 0 &&
           Number.isFinite(originalWidth) && Number.isFinite(originalHeight);
         blocks.push({ key: `block-${blocks.length}`, kind: 'image', runs: [], quote: quoteDepth > 0,
+          quoteGroupId: quoteTags[0]?.groupId ?? '', quoteLevel: quoteTags[quoteTags.length - 1]?.level ?? 0,
           url: original, description: alt, heading: false,
           imageWidth: hasOriginalSize ? originalWidth : Number.isFinite(width) && width > 0 ? width : 0,
           imageHeight: hasOriginalSize ? originalHeight : Number.isFinite(height) && height > 0 ? height : 0,
@@ -192,10 +300,25 @@ export function parsePostContent(cooked: string): PostBlock[] {
     }
     const blockTag: boolean = /^(p|div|section|article|details|summary|figure|figcaption|h[1-6]|blockquote|aside|pre|ul|ol|li|tr|table)$/.test(tag);
     if (blockTag) { flush(); }
-    if (!closing && (tag === 'blockquote' || (tag === 'aside' && /(^|\s)quote(\s|$)/.test(attribute(token, 'class'))))) {
-      quoteTags.push(tag);
+    if (!closing && (tag === 'blockquote' || (tag === 'aside' && /(^|\s)quote(\s|$)/.test(attribute(token, 'class').toLowerCase())))) {
+      const parent: PostQuoteContext | undefined = quoteTags[quoteTags.length - 1];
+      const quoteKey: string = `quote-${nextQuoteId++}`;
+      const level: number = parent === undefined ? 1 : tag === 'blockquote' && parent.tag === 'aside' ? parent.level : parent.level + 1;
+      const topic: string = attribute(token, 'data-topic');
+      const post: string = attribute(token, 'data-post');
+      const number: number = Number(post);
+      const header: PostQuoteHeader = { key: quoteKey, username: decodePostEntities(attribute(token, 'data-username')),
+        avatarUrl: '', href: postQuoteTarget(topic, post), postNumber: Number.isSafeInteger(number) && number > 0 ? number : 0 };
+      const context: PostQuoteContext = { tag: tag, groupId: quoteTags[0]?.groupId ?? quoteKey,
+        level: level, header: header, titleSeen: false };
+      quoteTags.push(context);
       quoteDepth++;
-    } else if (closing && quoteTags[quoteTags.length - 1] === tag) {
+      if (tag === 'aside') {
+        blocks.push({ key: `quote-header-${quoteKey}`, kind: 'quote_header', runs: [], quote: true,
+          quoteGroupId: context.groupId, quoteLevel: level, quoteHeader: header,
+          url: '', description: '', heading: false, imageWidth: 0, imageHeight: 0 });
+      }
+    } else if (closing && quoteTags[quoteTags.length - 1]?.tag === tag) {
       quoteTags.pop();
       quoteDepth = Math.max(0, quoteDepth - 1);
     }
@@ -232,6 +355,7 @@ export function parsePostContent(cooked: string): PostBlock[] {
       }
     }
   }
+  finishQuoteTitle();
   flush();
   return blocks;
 }
@@ -313,6 +437,144 @@ struct PostContentImage {
 }
 
 @ComponentV2
+struct PostContentQuoteHeader {
+  @Param quoteHeader: PostQuoteHeader = emptyPostQuoteHeader();
+  @Param ownerId: number = 0;
+  @Param canCollapse: boolean = false;
+  @Param quoteCollapsed: boolean = false;
+  @Event onOpenLink: (url: string) => void = (_url: string): void => {};
+  @Event onToggleQuote: () => void = (): void => {};
+
+  build() {
+    Row({ space: 6 }) {
+      Row({ space: 8 }) {
+        if (this.quoteHeader.avatarUrl) {
+          NativeForumImage({ url: this.quoteHeader.avatarUrl, fit: ImageFit.Cover, previewImageAspectRatio: 0,
+            ownerId: this.ownerId, accessibleLabel: `${this.quoteHeader.username || '引用作者'}的头像` })
+            .width(20).height(20).borderRadius(10).clip(true)
+        }
+        Text(this.quoteHeader.username || '引用').fontSize(14).fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary')).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+        if (this.quoteHeader.postNumber > 0) {
+          Text(`#${this.quoteHeader.postNumber}`).fontSize(12).fontColor($r('app.color.text_secondary'))
+        }
+      }.layoutWeight(1).constraintSize({ minHeight: 32 })
+        .onClick((): void => { if (this.quoteHeader.href) { this.onOpenLink(this.quoteHeader.href); } })
+      if (this.quoteHeader.href) {
+        Button({ type: ButtonType.Circle, buttonStyle: ButtonStyleMode.TEXTUAL }) {
+          SymbolGlyph($r('sys.symbol.link')).fontSize(17).fontColor([$r('app.color.text_secondary')])
+        }.width(32).height(32).backgroundColor(Color.Transparent).accessibilityText('查看引用原楼')
+          .onClick((): void => { this.onOpenLink(this.quoteHeader.href); })
+      }
+      if (this.canCollapse) {
+        Button({ type: ButtonType.Capsule, buttonStyle: ButtonStyleMode.TEXTUAL }) {
+          Row({ space: 5 }) {
+            SymbolGlyph(this.quoteCollapsed ? $r('sys.symbol.chevron_down') : $r('sys.symbol.chevron_up'))
+              .fontSize(12).fontColor([$r('app.color.text_secondary')])
+            Text(this.quoteCollapsed ? '展开' : '收起').fontSize(12).fontColor($r('app.color.text_secondary'))
+          }
+        }.height(32).padding({ left: 6, right: 6 }).backgroundColor(Color.Transparent)
+          .accessibilityText(this.quoteCollapsed ? '展开引用内容' : '收起引用内容').onClick(this.onToggleQuote)
+      }
+    }.width('100%').constraintSize({ minHeight: 32 })
+  }
+}
+
+@ComponentV2
+struct PostContentBlockView {
+  @Param postBlock: PostBlock = emptyPostBlock();
+  @Param quoted: boolean = false;
+  @Param compact: boolean = false;
+  @Param inlineContent: boolean = false;
+  @Param ownerId: number = 0;
+  @Param emojiUris: Map<string, string> = new Map<string, string>();
+  @Event onOpenLink: (url: string) => void = (_url: string): void => {};
+  @Event onPicture: (url: string) => void = (_url: string): void => {};
+
+  build() {
+    Column() {
+      if (this.postBlock.kind === 'quote_header') {
+        PostContentQuoteHeader({ quoteHeader: this.postBlock.quoteHeader ?? emptyPostQuoteHeader(),
+          ownerId: this.ownerId, onOpenLink: this.onOpenLink })
+      } else if (this.postBlock.kind === 'divider') {
+        Divider().color($r('app.color.divider')).margin({ top: 8, bottom: 8 })
+      } else if (this.postBlock.kind === 'image') {
+        PostContentImage({ url: this.postBlock.url, description: this.postBlock.description,
+          sourceWidth: this.postBlock.imageWidth, sourceHeight: this.postBlock.imageHeight,
+          displayWidth: this.postBlock.imageDisplayWidth || 0,
+          compact: this.compact, ownerId: this.ownerId,
+          onPicture: this.onPicture }).width('100%')
+      } else {
+        Column({ space: 0 }) {
+          if (this.postBlock.kind === 'code') {
+            Text(this.postBlock.codeLanguage || '代码').fontSize(11).fontColor($r('app.color.text_secondary'))
+              .padding({ left: 12, right: 12, top: 11, bottom: 11 }).width('100%')
+            Divider().color($r('app.color.divider'))
+          }
+          Text() {
+            ForEach(this.postBlock.runs, (run: PostInline) => {
+              if (run.emojiUrl && this.emojiUris.has(run.emojiUrl)) {
+                ImageSpan(this.emojiUris.get(run.emojiUrl) || '')
+                  .width(this.inlineContent ? 16 : this.compact ? 18 : 22)
+                  .height(this.inlineContent ? 16 : this.compact ? 18 : 22)
+                  .objectFit(ImageFit.Contain).verticalAlign(ImageSpanAlignment.CENTER)
+              } else {
+                Span(run.text)
+                  .fontWeight(run.bold || this.postBlock.heading ? FontWeight.Medium : FontWeight.Normal)
+                  .fontStyle(run.italic ? FontStyle.Italic : FontStyle.Normal)
+                  .fontFamily(run.code || this.postBlock.kind === 'code' ? 'monospace' : 'HarmonyOS Sans')
+                  .fontColor(run.href ? $r('app.color.accent') : $r('app.color.text_primary'))
+                  .decoration({ type: run.href ? TextDecorationType.Underline : TextDecorationType.None })
+                  .onClick((): void => { if (run.href) { this.onOpenLink(run.href); } })
+              }
+            }, (run: PostInline): string => run.key)
+          }.fontSize(this.inlineContent ? 13 : this.postBlock.kind === 'code' ? 14 : this.quoted ? 16 : this.postBlock.heading ? 21 : this.compact ? 14 : 17)
+            .lineHeight(this.inlineContent ? 20 : this.postBlock.kind === 'code' || this.quoted ? 24 : this.compact ? 22 : 28)
+            .textAlign(TextAlign.Start).width(this.inlineContent ? 'auto' : '100%').copyOption(CopyOptions.InApp)
+            .padding(this.postBlock.kind === 'code' ? 12 : 0)
+        }.width(this.inlineContent ? 'auto' : '100%').alignItems(HorizontalAlign.Start)
+          .backgroundColor(this.postBlock.kind === 'code' ? $r('app.color.selected_background') : Color.Transparent)
+          .borderRadius(this.postBlock.kind === 'code' ? 10 : 0).clip(this.postBlock.kind === 'code')
+      }
+    }.width(this.inlineContent ? 'auto' : '100%').alignItems(HorizontalAlign.Start)
+      .padding({ left: this.quoted ? Math.min(3, Math.max(0, (this.postBlock.quoteLevel ?? 1) - 1)) * 10 : 0 })
+  }
+}
+
+@ComponentV2
+struct PostContentQuoteGroup {
+  @Param contentGroup: PostContentGroup = { key: '', quote: true, blocks: [] };
+  @Param compact: boolean = false;
+  @Param ownerId: number = 0;
+  @Param emojiUris: Map<string, string> = new Map<string, string>();
+  @Event onOpenLink: (url: string) => void = (_url: string): void => {};
+  @Event onPicture: (url: string) => void = (_url: string): void => {};
+  @Local quoteCollapsed: boolean = false;
+
+  @Monitor('contentGroup')
+  quoteChanged(): void { this.quoteCollapsed = false; }
+
+  @Computed
+  get visibleBlocks(): PostBlock[] { return visiblePostQuoteBlocks(this.contentGroup, this.quoteCollapsed); }
+
+  build() {
+    Column({ space: 8 }) {
+      if (postQuoteCanCollapse(this.contentGroup)) {
+        PostContentQuoteHeader({ quoteHeader: this.contentGroup.header ?? emptyPostQuoteHeader(), ownerId: this.ownerId,
+          canCollapse: true, quoteCollapsed: this.quoteCollapsed, onOpenLink: this.onOpenLink,
+          onToggleQuote: (): void => { this.quoteCollapsed = !this.quoteCollapsed; } })
+      }
+      ForEach(this.visibleBlocks, (block: PostBlock) => {
+        PostContentBlockView({ postBlock: block, quoted: true, compact: this.compact, ownerId: this.ownerId,
+          emojiUris: this.emojiUris, onOpenLink: this.onOpenLink, onPicture: this.onPicture })
+      }, (block: PostBlock): string => block.key)
+    }.width('100%').alignItems(HorizontalAlign.Start).padding(10)
+      .backgroundColor($r('app.color.boost_background')).borderRadius(8)
+      .border({ width: { left: 3 }, color: $r('app.color.divider') })
+  }
+}
+
+@ComponentV2
 export struct RichPostContent {
   @Param cooked: string = '';
   @Param compact: boolean = false;
@@ -367,54 +629,24 @@ export struct RichPostContent {
   @Computed
   get blocks(): PostBlock[] { return parsePostContent(this.cooked); }
 
+  @Computed
+  get groups(): PostContentGroup[] { return groupPostContent(this.blocks); }
+
   build() {
-    Column({ space: this.inlineContent ? 0 : this.compact ? 6 : 14 }) {
-      ForEach(this.blocks, (block: PostBlock) => {
-        if (block.kind === 'divider') {
-          Divider().color($r('app.color.divider')).margin({ top: 8, bottom: 8 })
-        } else if (block.kind === 'image') {
-          PostContentImage({ url: block.url, description: block.description,
-            sourceWidth: block.imageWidth, sourceHeight: block.imageHeight,
-            displayWidth: block.imageDisplayWidth || 0,
-            compact: this.compact, ownerId: this.session.user?.id || 0,
-            onPicture: (url: string): void => this.onPicture(url) }).width('100%')
+    Column({ space: this.inlineContent ? 0 : this.compact ? 6 : 8 }) {
+      ForEach(this.groups, (group: PostContentGroup) => {
+        if (group.quote) {
+          PostContentQuoteGroup({ contentGroup: group, compact: this.compact,
+            ownerId: this.session.user?.id || 0, emojiUris: this.emojiUris,
+            onOpenLink: this.onOpenLink, onPicture: this.onPicture })
         } else {
-          Column({ space: 0 }) {
-          if (block.kind === 'code') {
-            Text(block.codeLanguage || '代码').fontSize(11).fontColor($r('app.color.text_secondary'))
-              .padding({ left: 12, right: 12, top: 11, bottom: 11 }).width('100%')
-            Divider().color($r('app.color.divider'))
-          }
-          Text() {
-            ForEach(block.runs, (run: PostInline) => {
-              if (run.emojiUrl && this.emojiUris.has(run.emojiUrl)) {
-                ImageSpan(this.emojiUris.get(run.emojiUrl) || '')
-                  .width(this.inlineContent ? 16 : this.compact ? 18 : 22)
-                  .height(this.inlineContent ? 16 : this.compact ? 18 : 22)
-                  .objectFit(ImageFit.Contain)
-                  .verticalAlign(ImageSpanAlignment.CENTER)
-              } else {
-                Span(run.text)
-                  .fontWeight(run.bold || block.heading ? FontWeight.Medium : FontWeight.Normal)
-                  .fontStyle(run.italic ? FontStyle.Italic : FontStyle.Normal)
-                  .fontFamily(run.code || block.kind === 'code' ? 'monospace' : 'HarmonyOS Sans')
-                  .fontColor(run.href ? $r('app.color.accent') : $r('app.color.text_primary'))
-                  .decoration({ type: run.href ? TextDecorationType.Underline : TextDecorationType.None })
-                  .onClick(() => { if (run.href) { this.onOpenLink(run.href); } })
-              }
-            }, (run: PostInline): string => run.key)
-          }
-          .fontSize(this.inlineContent ? 13 : block.heading ? 21 : this.compact ? 14 : block.kind === 'code' ? 14 : 17)
-          .lineHeight(this.inlineContent ? 20 : this.compact ? 22 : block.kind === 'code' ? 24 : 28)
-          .textAlign(TextAlign.Start).width(this.inlineContent ? 'auto' : '100%')
-          .copyOption(CopyOptions.InApp)
-          .padding(block.quote || block.kind === 'code' ? 12 : 0)
-          }.width(this.inlineContent ? 'auto' : '100%').alignItems(HorizontalAlign.Start)
-          .backgroundColor(block.quote || block.kind === 'code' ? $r('app.color.selected_background') : Color.Transparent)
-          .borderRadius(block.quote || block.kind === 'code' ? 10 : 0).clip(block.quote || block.kind === 'code')
-          .border({ width: { left: block.quote ? 3 : 0 }, color: $r('app.color.accent') })
+          ForEach(group.blocks, (block: PostBlock) => {
+            PostContentBlockView({ postBlock: block, compact: this.compact, inlineContent: this.inlineContent,
+              ownerId: this.session.user?.id || 0, emojiUris: this.emojiUris,
+              onOpenLink: this.onOpenLink, onPicture: this.onPicture })
+          }, (block: PostBlock): string => block.key)
         }
-      }, (block: PostBlock): string => block.key)
+      }, (group: PostContentGroup): string => group.key)
     }.width(this.inlineContent ? 'auto' : '100%').alignItems(HorizontalAlign.Start)
       .onVisibleAreaChange([0.01], (visible: boolean): void => {
         this.visible = visible;

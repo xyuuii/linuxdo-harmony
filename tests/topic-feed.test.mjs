@@ -27,6 +27,7 @@ function load(value, bindings = {}) {
 
 const presentation = load(source('services/TopicFeedPresentation'));
 const models = load(source('models/ForumModels'));
+const readingPreferences = load(source('services/ReadingPreferences'), models);
 const feedSource = source('components/TopicFeed');
 const start = feedSource.indexOf('export struct TopicFeed');
 const end = feedSource.indexOf('  @LocalBuilder', start);
@@ -41,18 +42,19 @@ function runtime() {
   const categoryRequests = [];
   const timers = new Map();
   let nextTimer = 0;
-  const fetch = (kind, page, token) => new Promise((resolve, reject) => { requests.push({ kind, page, token, resolve, reject }); });
+  const fetch = (kind, page, token, options) => new Promise((resolve, reject) => { requests.push({ kind, page, token, options, resolve, reject }); });
   class RequestCancellation { cancelled = false; cancel() { this.cancelled = true; } }
   class ForumApiError extends Error { kind = 'network'; }
   const exported = load(feedClass, {
     ...presentation, ...models,
+    firstUnreadPostNumber: readingPreferences.firstUnreadPostNumber,
     AppearanceSettings: class { autoRefresh = false; },
     Scroller: class { edges = []; position = 0; scrollEdge(edge) { this.edges.push(edge); this.position = 0; } },
     Edge: { Top: 'top' }, RequestCancellation, ForumApiError,
     ForumErrorKind: { VerificationRequired: 'verification', AuthenticationRequired: 'authentication' },
     setInterval: callback => { const id = ++nextTimer; timers.set(id, callback); return id; },
     clearInterval: id => { timers.delete(id); },
-    forumApi: { fetchTopicFeed: (filter, page, token) => fetch(filter, page, token),
+    forumApi: { fetchTopicFeed: (filter, page, token, options) => fetch(filter, page, token, options),
       fetchCategoryTopics: (_, __, page, token) => fetch('category', page, token),
       fetchCategories: () => new Promise((resolve, reject) => { categoryRequests.push({ resolve, reject }); }) }
   });
@@ -352,4 +354,34 @@ test('returning from a detached page hydrates retained rows without re-fetching 
   feed.appear(); assert.equal(requests.length, 1); assert.equal(categoryRequests.length, 2);
   categoryRequests[1].resolve([{ id: 8, name: '开发调优', subcategoryList: [] }]); await flush();
   assert.equal(feed.items[0].category.name, '开发调优');
+});
+
+test('changing taxonomy cancels the old list and pagination carries the complete selected scope', async () => {
+  const { feed, requests } = runtime();
+  feed.appear();
+  const old = requests[0];
+  Object.assign(feed, { browseCategoryId: 4, tagName: '人工智能', sortOrder: 'likes', topPeriod: 'monthly' });
+  feed.browseChanged();
+  assert.equal(old.token.cancelled, true);
+  assert.deepEqual(requests[1].options, { categoryId: 4, tagName: '人工智能', sortOrder: 'likes', topPeriod: 'monthly' });
+  await finish(old, [item(1)]);
+  assert.deepEqual(ids(feed), []);
+  await finish(requests[1], [item(2)]);
+  feed.loadNextPage();
+  assert.equal(requests[2].page, 1);
+  assert.deepEqual(requests[2].options, requests[1].options);
+  await finish(requests[2], [item(3)], false);
+  assert.deepEqual(ids(feed), [2, 3]);
+});
+
+test('opening a feed item honors actual first-unread progress and the reading preference', () => {
+  const { feed } = runtime();
+  const opened = [];
+  feed.onOpenTopic = (...args) => opened.push(args);
+  const topic = item(10); Object.assign(topic.topic, { lastReadPostNumber: 6, highestPostNumber: 20, postsCount: 20 });
+  feed.appearance.openAtUnread = true;
+  feed.openItem(topic);
+  feed.appearance.openAtUnread = false;
+  feed.openItem(topic);
+  assert.deepEqual(opened, [[10, 7], [10, 1]]);
 });

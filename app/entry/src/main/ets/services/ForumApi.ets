@@ -2,17 +2,31 @@ import { http } from '@kit.NetworkKit';
 import { webview } from '@kit.ArkWeb';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { url as urlUtils } from '@kit.ArkTS';
+import { TopicReadBatch, TopicReadTiming } from './TopicReadTracker';
+import { PostRevisionRecord } from '../models/PostRevisionModels';
+import { PostRevisionWire, postRevisionFromWire } from './PostRevisionWire';
+import { ForumUserProfile, ForumUserSummary, ForumUserActivityFilter, ForumUserActivityPage } from '../models/UserProfileModels';
 import {
-  Topic, Category, DiscourseUser, Post, Boost, TopicDetail, TopicListItem, TopicPage, TopicFeedFilter,
-  SearchPage, SearchOrder, NotificationFilter, ForumNotification, NotificationPage, UnreadSummary,
-  ProfileSection, ProfileOrder, ProfilePage, ProfileEntry, ProfileField, UploadedFile, TopicCreationResult,
-  flattenCategories, notificationIncludes, measureBoost, safeForumUrl
+  ForumUserProfileResponseWire, ForumUserSummaryResponseWire, ForumUserActivityResponseWire,
+  forumUserProfileFromWire, forumUserSummaryFromWire, forumUserActivityFromWire
+} from './UserProfileWire';
+import { DirectoryTag, DirectoryTagPage, DirectoryBadge, DirectoryGroupPage, directoryTagPage } from '../models/DirectoryModels';
+import {
+  DirectoryTagsResponseWire, DirectoryBadgesResponseWire, DirectoryGroupsResponseWire,
+  directoryTagsFromWire, directoryBadgesFromWire, directoryGroupsFromWire
+} from './DirectoryWire';
+import {
+  Topic, Category, DiscourseUser, Post, Boost, TopicDetail, TopicListItem, TopicPage, TopicFeedFilter, TopicBrowseOptions,
+  SearchPage, SearchOrder, ForumSearchPostMatch, NotificationFilter, ForumNotification, NotificationPage, UnreadSummary,
+  ProfileSection, ProfileBoostDirection, ProfileOrder, ProfilePage, ProfileEntry, ProfileField, UploadedFile, TopicCreationResult,
+  flattenCategories, notificationIncludes, measureBoost, safeForumUrl, avatarUrlOf
 } from '../models/ForumModels';
 import {
   TopicListResponseWire, CategoryResponseWire, CurrentUserWire, TopicDetailWire, PostStreamResponseWire,
   SearchResponseWire, PostWire, PostResponseWire, BoostWire, NotificationResponseWire, CsrfWire,
   UploadResponseWire, LoginResponseWire, UserResponseWire, SummaryResponseWire, SummaryWire, EmailsWire,
-  ActionsResponseWire, ActionWire, UserWire, EmojiWire, TopicCreationWire,
+  ActionsResponseWire, ActionWire, UserWire, EmojiWire, TopicCreationWire, BookmarksResponseWire, BookmarkWire, TopicWire,
+  ProfileSolvedResponseWire, ProfileSolvedPostWire, ProfileBoostsResponseWire, ProfileBoostEntryWire, ProfileBoostPostWire,
   decodeObject, decodeArray, text, numberValue, bool, list, plainText, topicFromWire, userFromWire,
   categoryFromWire, detailFromWire, postFromWire, boostFromWire, streamFromWire, notificationFromWire
 } from './ForumWire';
@@ -67,9 +81,10 @@ export interface BrowserResponse { status: number; body: string; headers: Record
 export interface BrowserMediaResponse { status: number; bytes: ArrayBuffer; headers: Record<string, string>; }
 export type BrowserRequestTransport = (request: BrowserRequest, cancellation?: RequestCancellation) => Promise<BrowserResponse>;
 export type BrowserMediaTransport = (url: string, cancellation: RequestCancellation) => Promise<BrowserMediaResponse>;
+export type BrowserCookTransport = (raw: string, cancellation: RequestCancellation) => Promise<string>;
 export type BrowserSessionRecovery = (cancellation: RequestCancellation) => Promise<boolean>;
 type ResponseHeaderValue = string | string[];
-interface RequestSpec { path: string; method: http.RequestMethod; body?: string; csrf?: string;
+interface RequestSpec { path: string; method: http.RequestMethod; body?: string; csrf?: string; requiresForeground?: boolean;
   multipart?: http.MultiFormData[]; cancellation?: RequestCancellation; }
 interface PasswordLoginBody { login: string; password: string; second_factor_method: number; second_factor_token?: string; }
 interface EmailLoginBody { login: string; }
@@ -78,8 +93,13 @@ interface CreatePostBody { raw: string; topic_id: number; reply_to_post_number?:
 interface CreateTopicTagBody { name: string; }
 interface CreateTopicBody { title: string; raw: string; category: number; tags: CreateTopicTagBody[]; nested_post: boolean; }
 interface RawPostBody { raw: string; }
+interface TopicReadTimingsBody { topic_id: number; topic_time: number; timings: Record<string, number>; }
 interface EditPostBody { post: RawPostBody; }
 interface IdBody { id: number; }
+interface BookmarkPostBody { bookmarkable_id: number; bookmarkable_type: string; }
+interface BookmarkMutationWire { id?: number; success?: string | boolean; errors?: string[]; }
+interface TopicNotificationBody { notification_level: number; }
+interface PostFlagBody { id: number; post_action_type_id: number; message: string; }
 
 function cancelledError(): ForumApiError { return new ForumApiError(ForumErrorKind.Cancelled, 0, '请求已取消'); }
 function validateId(value: number): void {
@@ -117,6 +137,8 @@ export function emojiImageUrl(value: string): string {
 }
 
 export class ForumApi {
+  private directoryTagsCache: DirectoryTag[] | undefined = undefined;
+  private directoryTagsLoadedAt: number = 0;
   private categoryCache: Category[] | undefined = undefined;
   private categoryInFlight: Promise<Category[]> | undefined = undefined;
   private emojiCache: Map<string, string> | undefined = undefined;
@@ -125,6 +147,8 @@ export class ForumApi {
   private nextRequestAt: number = 0;
   private browserTransport: BrowserRequestTransport | undefined = undefined;
   private browserMediaTransport: BrowserMediaTransport | undefined = undefined;
+  private browserCookTransport: BrowserCookTransport | undefined = undefined;
+  private previewRequests: Set<RequestCancellation> = new Set<RequestCancellation>();
   private browserTransportEnabled: boolean = false;
   private browserRecovery: BrowserSessionRecovery | undefined = undefined;
   private recoveryTask: Promise<boolean> | undefined = undefined;
@@ -133,6 +157,7 @@ export class ForumApi {
   private recoveryVersion: number = 0;
   private writesInFlight: number = 0;
   private foreground: boolean = true;
+  private readTimingRequests: Set<RequestCancellation> = new Set<RequestCancellation>();
   private userAgent: string = '';
   private sessionGeneration: number = 0;
   private sessionResetHandlers: Set<() => void> = new Set<() => void>();
@@ -148,6 +173,35 @@ export class ForumApi {
   }
   registerBrowserTransport(transport: BrowserRequestTransport): void { this.browserTransport = transport; }
   registerBrowserMediaTransport(transport: BrowserMediaTransport): void { this.browserMediaTransport = transport; }
+  registerBrowserCookTransport(transport: BrowserCookTransport | undefined): void { this.browserCookTransport = transport; }
+  /** User-requested local cooking in the already verified forum Web context.
+   * This does not send a draft to a publishing or upload endpoint.
+   */
+  async previewDraft(raw: string, cancellation: RequestCancellation): Promise<string> {
+    if (typeof raw !== 'string' || raw.length === 0 || raw.length > 65536) {
+      throw new ForumApiError(ForumErrorKind.Rejected, 0, '预览内容为空或过长');
+    }
+    const generation: number = this.sessionGeneration;
+    if (cancellation.isCancelled || !this.foreground) { throw cancelledError(); }
+    const cancel: () => void = (): void => cancellation.cancel();
+    this.activeRequests.add(cancel); this.previewRequests.add(cancellation);
+    try {
+      if (this.recoveryTask !== undefined) { await this.waitForRecovery(this.recoveryTask, cancellation); }
+      this.ensureSessionGeneration(generation);
+      if (cancellation.isCancelled || !this.foreground) { throw cancelledError(); }
+      const transport: BrowserCookTransport | undefined = this.browserCookTransport;
+      if (!this.browserTransportEnabled || transport === undefined) {
+        throw new ForumApiError(ForumErrorKind.VerificationRequired, 0, '请先完成社区网页验证，再重试预览');
+      }
+      const cooked: string = await transport(raw, cancellation);
+      this.ensureSessionGeneration(generation);
+      if (cancellation.isCancelled || !this.foreground) { throw cancelledError(); }
+      if (typeof cooked !== 'string' || cooked.length > 262144) {
+        throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '排版后的内容过长或格式不正确，无法完整预览');
+      }
+      return cooked;
+    } finally { this.activeRequests.delete(cancel); this.previewRequests.delete(cancellation); }
+  }
   canUseBrowserMedia(): boolean { return this.browserTransportEnabled && this.browserMediaTransport !== undefined; }
   getReadRecoveryVersion(): number { return this.recoveryVersion; }
   async requestBrowserMedia(url: string, cancellation: RequestCancellation): Promise<BrowserMediaResponse> {
@@ -180,7 +234,11 @@ export class ForumApi {
   }
   setForeground(active: boolean): void {
     this.foreground = active;
-    if (!active) { this.cancelSessionRecovery(); }
+    if (!active) {
+      this.cancelSessionRecovery();
+      this.readTimingRequests.forEach((request: RequestCancellation): void => { request.cancel(); });
+      this.previewRequests.forEach((request: RequestCancellation): void => { request.cancel(); });
+    }
   }
   setBrowserTransportEnabled(enabled: boolean): void { this.browserTransportEnabled = enabled; }
   dispose(): void {
@@ -239,6 +297,8 @@ export class ForumApi {
     this.nextRecoveryAt = 0;
     this.categoryCache = undefined;
     this.categoryInFlight = undefined;
+    this.directoryTagsCache = undefined;
+    this.directoryTagsLoadedAt = 0;
     this.emojiCache = undefined;
     this.emojiInFlight = undefined;
     this.sessionResetHandlers.forEach((handler: () => void): void => handler());
@@ -433,6 +493,7 @@ export class ForumApi {
   }
 
   private async sendRequest(spec: RequestSpec, generation: number, cancellation: RequestCancellation): Promise<string> {
+    if (spec.requiresForeground && !this.foreground) { throw cancelledError(); }
     const writing: boolean = spec.method !== http.RequestMethod.GET;
     if (writing) { this.writesInFlight++; }
     try {
@@ -465,6 +526,38 @@ export class ForumApi {
     if (csrf.length === 0 || /[\r\n]/.test(csrf)) { throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '无法获取会话保护令牌，请重新登录'); }
     return csrf;
   }
+  async recordTopicReadTimings(batch: TopicReadBatch, cancellation: RequestCancellation): Promise<void> {
+    validateId(batch.topicId);
+    if (!Number.isSafeInteger(batch.ownerId) || batch.ownerId <= 0 ||
+      !Number.isSafeInteger(batch.topicTimeMs) || batch.topicTimeMs <= 0 || batch.topicTimeMs > 60000 ||
+      !Array.isArray(batch.postTimings) || batch.postTimings.length === 0 || batch.postTimings.length > 100) {
+      throw new ForumApiError(ForumErrorKind.Rejected, 0, '阅读记录无效，未提交');
+    }
+    const timings: Record<string, number> = {};
+    batch.postTimings.forEach((timing: TopicReadTiming): void => {
+      validateId(timing.postNumber);
+      if (!Number.isSafeInteger(timing.milliseconds) || timing.milliseconds <= 0 || timing.milliseconds > batch.topicTimeMs ||
+        timings[String(timing.postNumber)] !== undefined) {
+        throw new ForumApiError(ForumErrorKind.Rejected, 0, '阅读时间无效，未提交');
+      }
+      timings[String(timing.postNumber)] = timing.milliseconds;
+    });
+    this.ensureSessionGeneration(batch.sessionGeneration);
+    if (!this.foreground || cancellation.isCancelled) { throw cancelledError(); }
+    this.readTimingRequests.add(cancellation);
+    try {
+      const csrf: string = await this.fetchCsrf(cancellation);
+      this.ensureSessionGeneration(batch.sessionGeneration);
+      if (!this.foreground || cancellation.isCancelled) { throw cancelledError(); }
+      // Discourse TopicsController.timings accepts milliseconds under `timings`,
+      // keyed by post number. Its confirmed 2xx response has an empty body.
+      // The caller owns cancellation on covering/leaving the reader. No replay.
+      const body: TopicReadTimingsBody = { topic_id: batch.topicId, topic_time: batch.topicTimeMs, timings: timings };
+      await this.request({ path: '/topics/timings', method: http.RequestMethod.POST,
+        body: JSON.stringify(body),
+        csrf: csrf, cancellation: cancellation, requiresForeground: true });
+    } finally { this.readTimingRequests.delete(cancellation); }
+  }
   async fetchCategories(force: boolean = false, cancellation?: RequestCancellation): Promise<Category[]> {
     if (!force && this.categoryCache) { return this.categoryCache; }
     if (!force && this.categoryInFlight && !cancellation) { return this.categoryInFlight; }
@@ -485,6 +578,50 @@ export class ForumApi {
     return categories;
   }
   cachedCategories(): Category[] { return this.categoryCache ?? []; }
+  /** /tags.json returns the complete permission-filtered catalog, including grouped tags. */
+  async fetchDirectoryTags(query: string = '', page: number = 0, cancellation?: RequestCancellation,
+    alphabetical: boolean = false, force: boolean = false): Promise<DirectoryTagPage> {
+    validateCursor(page);
+    if (query.length > 200) { throw new ForumApiError(ForumErrorKind.Rejected, 0, '标签搜索内容过长'); }
+    if (cancellation?.isCancelled) { throw cancelledError(); }
+    const generation: number = this.sessionGeneration;
+    let tags: DirectoryTag[] | undefined = force ? undefined : this.directoryTagsCache;
+    if (tags === undefined || Date.now() - this.directoryTagsLoadedAt > 300000) {
+      const response: DirectoryTagsResponseWire = this.parse<DirectoryTagsResponseWire>(await this.get('/tags.json', cancellation));
+      this.ensureSessionGeneration(generation);
+      if (cancellation?.isCancelled) { throw cancelledError(); }
+      if (!Array.isArray(response.tags)) {
+        throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区未返回标签目录');
+      }
+      tags = directoryTagsFromWire(response);
+      this.directoryTagsCache = tags; this.directoryTagsLoadedAt = Date.now();
+    }
+    this.ensureSessionGeneration(generation);
+    return directoryTagPage(tags, query, page, alphabetical);
+  }
+  async fetchDirectoryBadges(cancellation?: RequestCancellation): Promise<DirectoryBadge[]> {
+    const generation: number = this.sessionGeneration;
+    const response: DirectoryBadgesResponseWire = this.parse<DirectoryBadgesResponseWire>(await this.get('/badges.json?only_listable=true', cancellation));
+    this.ensureSessionGeneration(generation);
+    if (cancellation?.isCancelled) { throw cancelledError(); }
+    if (!Array.isArray(response.badges)) {
+      throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区未返回徽章目录');
+    }
+    return directoryBadgesFromWire(response);
+  }
+  async fetchDirectoryGroups(query: string = '', page: number = 0, cancellation?: RequestCancellation): Promise<DirectoryGroupPage> {
+    validateCursor(page);
+    if (query.length > 200) { throw new ForumApiError(ForumErrorKind.Rejected, 0, '群组搜索内容过长'); }
+    const generation: number = this.sessionGeneration;
+    const path: string = `/groups.json?page=${page}&order=name&asc=true&filter=${encodeURIComponent(query.trim())}`;
+    const response: DirectoryGroupsResponseWire = this.parse<DirectoryGroupsResponseWire>(await this.get(path, cancellation));
+    this.ensureSessionGeneration(generation);
+    if (cancellation?.isCancelled) { throw cancelledError(); }
+    if (!Array.isArray(response.groups)) {
+      throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区未返回群组目录');
+    }
+    return directoryGroupsFromWire(response);
+  }
   async fetchCreateTopicCategories(cancellation?: RequestCancellation): Promise<Category[]> {
     const generation: number = this.sessionGeneration;
     // Permissions are account-scoped and can change while the composer is open.
@@ -511,17 +648,29 @@ export class ForumApi {
   async fetchLatest(page: number = 0, cancellation?: RequestCancellation): Promise<TopicPage> {
     return this.fetchTopicFeed(TopicFeedFilter.Latest, page, cancellation);
   }
-  async fetchTopicFeed(filter: TopicFeedFilter, page: number = 0, cancellation?: RequestCancellation): Promise<TopicPage> {
+  async fetchTopicFeed(filter: TopicFeedFilter, page: number = 0, cancellation?: RequestCancellation,
+    options?: TopicBrowseOptions): Promise<TopicPage> {
     validateCursor(page);
     if (filter !== TopicFeedFilter.Latest && filter !== TopicFeedFilter.New && filter !== TopicFeedFilter.Unread &&
       filter !== TopicFeedFilter.Hot && filter !== TopicFeedFilter.Top) {
       throw new ForumApiError(ForumErrorKind.Rejected, 0, '话题筛选不受支持');
     }
-    // Discourse exposes each filter as its own list route. Keep top's period
-    // fixed across pagination instead of letting the server infer it per visit.
-    const period: string = filter === TopicFeedFilter.Top ? '&period=weekly' : '';
+    const period: string = options?.topPeriod || 'weekly';
+    if (['daily', 'weekly', 'monthly', 'quarterly', 'yearly', 'all'].indexOf(period) < 0 ||
+      (options !== undefined && (!Number.isSafeInteger(options.categoryId) || options.categoryId < 0 ||
+      options.tagName.length > 100 || /[\u0000-\u001f\u007f]/.test(options.tagName) ||
+      ['', 'activity', 'created', 'posts', 'likes', 'views'].indexOf(options.sortOrder) < 0))) {
+      throw new ForumApiError(ForumErrorKind.Rejected, 0, '话题筛选条件无效');
+    }
+    // Carry the same taxonomy, sort and ranking period through every page.
+    let suffix: string = filter === TopicFeedFilter.Top ? `&period=${period}` : '';
+    if (options !== undefined) {
+      if (options.categoryId > 0) { suffix += `&category=${options.categoryId}`; }
+      if (options.tagName.length > 0) { suffix += `&tags%5B%5D=${encodeURIComponent(options.tagName)}`; }
+      if (options.sortOrder.length > 0) { suffix += `&order=${options.sortOrder}&ascending=false`; }
+    }
     try {
-      return this.topicPage(this.parse<TopicListResponseWire>(await this.get(`/${filter}.json?page=${page}${period}`, cancellation)));
+      return this.topicPage(this.parse<TopicListResponseWire>(await this.get(`/${filter}.json?page=${page}${suffix}`, cancellation)));
     } catch (error) {
       if (error instanceof ForumApiError && error.kind === ForumErrorKind.NotFound) {
         throw new ForumApiError(ForumErrorKind.Unsupported, error.status, '社区暂未开放此话题筛选，请切换其他标签。');
@@ -597,22 +746,34 @@ export class ForumApi {
     }
   }
   async search(query: string, page: number = 1, order: SearchOrder = SearchOrder.Relevance, cancellation?: RequestCancellation): Promise<SearchPage> {
+    const generation: number = this.sessionGeneration;
     validateCursor(page);
     const trimmed: string = query.trim();
     if (trimmed.length === 0 || trimmed.length > 1000) { throw new ForumApiError(ForumErrorKind.Rejected, 0, '请输入有效的搜索词'); }
     const ordered: string = order === SearchOrder.Relevance ? trimmed : trimmed.replace(/(?:^|\s)order:\S+/g, ' ').trim() + ' order:' + order;
     const response: SearchResponseWire = this.parse<SearchResponseWire>(await this.get(`/search.json?q=${encodeURIComponent(ordered)}&page=${page}`, cancellation));
+    this.ensureSessionGeneration(generation);
+    if (cancellation?.isCancelled) { throw cancelledError(); }
     const posts: Post[] = list(response.posts).map((post: PostWire): Post => postFromWire(post));
     const categories: Category[] = flattenCategories(this.categoryCache ?? []);
     const excerpts: Map<number, string> = new Map<number, string>();
+    const postNumbers: Map<number, number> = new Map<number, number>();
     const items: TopicListItem[] = list(response.topics).map((wire): TopicListItem => {
       const topic: Topic = topicFromWire(wire);
       const post: Post | undefined = posts.find((item: Post): boolean => item.topicId === topic.id);
       excerpts.set(topic.id, post?.blurb ?? '');
+      const postNumber: number = post?.postNumber ?? 1;
+      postNumbers.set(topic.id, Number.isSafeInteger(postNumber) && postNumber > 0 ? postNumber : 1);
       return { topic: topic, authorUsername: post?.username ?? '', avatarUrl: post?.avatarUrl ?? '',
         category: categories.find((category: Category): boolean => category.id === topic.categoryId) };
     });
-    return { items: items, excerpts: excerpts, hasMore: bool(response.grouped_search_result?.more_full_page_results) && items.length > 0 };
+    const postMatches: ForumSearchPostMatch[] = posts.filter((post: Post): boolean => post.topicId > 0 && post.postNumber > 0)
+      .map((post: Post): ForumSearchPostMatch => {
+        return { id: `${post.topicId}:${post.id}:${post.postNumber}`, topicId: post.topicId, postNumber: post.postNumber,
+          username: post.username, avatarUrl: post.avatarUrl, excerpt: plainText(post.blurb || post.cooked), createdAt: post.createdAt };
+      });
+    return { items: items, excerpts: excerpts, postNumbers: postNumbers, postMatches: postMatches,
+      hasMore: bool(response.grouped_search_result?.more_full_page_results) && items.length > 0 };
   }
 
   async fetchNotifications(offset: number = 0, filter: NotificationFilter = NotificationFilter.All,
@@ -697,6 +858,16 @@ export class ForumApi {
     if (typeof response.raw !== 'string') { throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区未返回可编辑的原文'); }
     return response.raw;
   }
+  async fetchPostRevision(postId: number, revision: number = 0, cancellation?: RequestCancellation): Promise<PostRevisionRecord> {
+    validateId(postId);
+    if (!Number.isSafeInteger(revision) || (revision !== 0 && revision < 2)) {
+      throw new ForumApiError(ForumErrorKind.Rejected, 0, '无效的历史版本');
+    }
+    const target: string = revision === 0 ? 'latest' : String(revision);
+    const response: PostRevisionWire = this.parse<PostRevisionWire>(await this.get(`/posts/${postId}/revisions/${target}.json`, cancellation));
+    try { return postRevisionFromWire(response, postId, revision); }
+    catch { throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '编辑历史数据不完整，请刷新后重试'); }
+  }
   async createPost(topicId: number, raw: string, replyToPostNumber?: number, cancellation?: RequestCancellation): Promise<Post> {
     validateId(topicId);
     const body: CreatePostBody = { topic_id: topicId, raw: validateRaw(raw) };
@@ -751,6 +922,67 @@ export class ForumApi {
   }
   async deletePost(postId: number, cancellation?: RequestCancellation): Promise<void> {
     validateId(postId); await this.mutate(`/posts/${postId}.json`, http.RequestMethod.DELETE, '', cancellation);
+  }
+  async setTopicNotificationLevel(topicId: number, level: number, cancellation?: RequestCancellation): Promise<void> {
+    validateId(topicId);
+    if (!Number.isInteger(level) || level < 0 || level > 3) {
+      throw new ForumApiError(ForumErrorKind.Rejected, 0, '话题通知级别无效');
+    }
+    const body: TopicNotificationBody = { notification_level: level };
+    const raw: string = await this.mutate(`/t/${topicId}/notifications.json`, http.RequestMethod.POST,
+      JSON.stringify(body), cancellation);
+    let response: BookmarkMutationWire;
+    try { response = decodeObject<BookmarkMutationWire>(raw); }
+    catch { throw new ForumApiError(ForumErrorKind.UnknownResult, 0, '通知设置结果未确认，请重新打开话题核对'); }
+    if (response.success !== 'OK' && response.success !== true) {
+      throw new ForumApiError(response.success === false ? ForumErrorKind.Rejected : ForumErrorKind.UnknownResult,
+        0, serverValidationMessage(raw) || '通知设置结果未确认，请重新打开话题核对');
+    }
+  }
+  async createPostBookmark(postId: number, cancellation?: RequestCancellation): Promise<number> {
+    validateId(postId);
+    const body: BookmarkPostBody = { bookmarkable_id: postId, bookmarkable_type: 'Post' };
+    const raw: string = await this.mutate('/bookmarks.json', http.RequestMethod.POST, JSON.stringify(body), cancellation);
+    let response: BookmarkMutationWire;
+    try { response = decodeObject<BookmarkMutationWire>(raw); }
+    catch { throw new ForumApiError(ForumErrorKind.UnknownResult, 0, '收藏结果未确认，请刷新帖子或查看我的收藏，避免重复提交'); }
+    if (response.success === false) {
+      throw new ForumApiError(ForumErrorKind.Rejected, 0, serverValidationMessage(raw) || '社区未接受此次收藏');
+    }
+    const id: number = numberValue(response.id);
+    if ((response.success !== true && response.success !== 'OK') || !Number.isSafeInteger(id) || id <= 0) {
+      throw new ForumApiError(ForumErrorKind.UnknownResult, 0, '收藏结果未确认，请刷新帖子或查看我的收藏，避免重复提交');
+    }
+    return id;
+  }
+  async flagPost(postId: number, actionType: number, message: string, cancellation?: RequestCancellation): Promise<Post> {
+    validateId(postId);
+    if ([3, 4, 7, 8].indexOf(actionType) < 0 || message.length > 8000 || (actionType === 8 && !message.trim())) {
+      throw new ForumApiError(ForumErrorKind.Rejected, 0, '请选择举报原因，并填写必要的说明');
+    }
+    const body: PostFlagBody = { id: postId, post_action_type_id: actionType, message: message.trim() };
+    const raw: string = await this.mutate('/post_actions.json', http.RequestMethod.POST, JSON.stringify(body), cancellation);
+    try {
+      const response: PostWire = this.parse<PostWire>(raw);
+      if (response.id !== postId || numberValue(response.topic_id) <= 0 || numberValue(response.post_number) <= 0 ||
+        typeof response.cooked !== 'string') { throw new Error('Unconfirmed flag receipt'); }
+      return postFromWire(response);
+    } catch {
+      throw new ForumApiError(ForumErrorKind.UnknownResult, 0, '举报结果未确认，请先核对楼层状态，避免重复提交');
+    }
+  }
+  async deleteBookmark(bookmarkId: number, cancellation?: RequestCancellation): Promise<void> {
+    validateId(bookmarkId);
+    const raw: string = await this.mutate(`/bookmarks/${bookmarkId}.json`, http.RequestMethod.DELETE, '', cancellation);
+    let response: BookmarkMutationWire;
+    try { response = decodeObject<BookmarkMutationWire>(raw); }
+    catch { throw new ForumApiError(ForumErrorKind.UnknownResult, 0, '取消收藏结果未确认，请刷新帖子或查看我的收藏'); }
+    if (response.success === false) {
+      throw new ForumApiError(ForumErrorKind.Rejected, 0, serverValidationMessage(raw) || '社区未接受此次取消收藏');
+    }
+    if (response.success !== true && response.success !== 'OK') {
+      throw new ForumApiError(ForumErrorKind.UnknownResult, 0, '取消收藏结果未确认，请刷新帖子或查看我的收藏');
+    }
   }
   async toggleReaction(postId: number, reaction: string, cancellation?: RequestCancellation): Promise<Post> {
     validateId(postId);
@@ -863,18 +1095,181 @@ export class ForumApi {
     await webview.WebCookieManager.clearAllCookies();
   }
 
+  private publicProfileUsername(username: string): string {
+    const clean: string = username.trim().replace(/^@/, '');
+    if (!/^[\p{L}\p{N}_.-]{1,60}$/u.test(clean)) {
+      throw new ForumApiError(ForumErrorKind.Rejected, 0, '无效的社区用户名');
+    }
+    return clean;
+  }
+  async fetchUserProfile(username: string, cancellation?: RequestCancellation): Promise<ForumUserProfile> {
+    const clean: string = this.publicProfileUsername(username);
+    const generation: number = this.sessionGeneration;
+    // Public profile inspection must not register a visit to another member.
+    const response: ForumUserProfileResponseWire = this.parse<ForumUserProfileResponseWire>(
+      await this.get(`/u/${encodeURIComponent(clean)}.json?skip_track_visit=true`, cancellation));
+    this.ensureSessionGeneration(generation);
+    if (cancellation?.isCancelled) { throw cancelledError(); }
+    if (!response.user || numberValue(response.user.id) <= 0 || text(response.user.username).toLocaleLowerCase() !== clean.toLocaleLowerCase()) {
+      throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区未返回此用户的资料');
+    }
+    return forumUserProfileFromWire(response.user);
+  }
+  async fetchUserProfileSummary(username: string, cancellation?: RequestCancellation): Promise<ForumUserSummary> {
+    const clean: string = this.publicProfileUsername(username);
+    const generation: number = this.sessionGeneration;
+    const response: ForumUserSummaryResponseWire = this.parse<ForumUserSummaryResponseWire>(
+      await this.get(`/u/${encodeURIComponent(clean)}/summary.json`, cancellation));
+    this.ensureSessionGeneration(generation);
+    if (cancellation?.isCancelled) { throw cancelledError(); }
+    if (!response.user_summary) { throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区未返回此用户的统计'); }
+    return forumUserSummaryFromWire(response.user_summary);
+  }
+  async fetchUserProfileActivity(username: string, filter: ForumUserActivityFilter = ForumUserActivityFilter.Topics,
+    offset: number = 0, cancellation?: RequestCancellation): Promise<ForumUserActivityPage> {
+    const clean: string = this.publicProfileUsername(username);
+    validateCursor(offset);
+    if (filter !== ForumUserActivityFilter.Topics && filter !== ForumUserActivityFilter.Replies && filter !== ForumUserActivityFilter.All) {
+      throw new ForumApiError(ForumErrorKind.Rejected, 0, '用户活动筛选不受支持');
+    }
+    const generation: number = this.sessionGeneration;
+    const response: ForumUserActivityResponseWire = this.parse<ForumUserActivityResponseWire>(
+      await this.get(`/user_actions.json?username=${encodeURIComponent(clean)}&offset=${offset}&limit=30&filter=${encodeURIComponent(filter)}`, cancellation));
+    this.ensureSessionGeneration(generation);
+    if (cancellation?.isCancelled) { throw cancelledError(); }
+    if (!Array.isArray(response.user_actions)) { throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区未返回此用户的活动'); }
+    return forumUserActivityFromWire(response.user_actions, filter, offset);
+  }
+
+  private async readProfilePlugin(path: string, label: string, cancellation?: RequestCancellation): Promise<string> {
+    try { return await this.get(path, cancellation); }
+    catch (error) {
+      if (error instanceof ForumApiError) {
+        if (error.kind === ForumErrorKind.NotFound) {
+          throw new ForumApiError(ForumErrorKind.Unsupported, error.status, `当前社区未开放${label}，或此账号无权查看`);
+        }
+        throw error;
+      }
+      throw new ForumApiError(ForumErrorKind.Network, 0, `${label}暂时无法加载，请重试`);
+    }
+  }
+  private boostPostFloor(post: ProfileBoostPostWire): number {
+    const safe: string = safeForumUrl(text(post.url));
+    const route: string = safe.startsWith(FORUM_ORIGIN) ? safe.substring(FORUM_ORIGIN.length).split(/[?#]/)[0] : '';
+    // BoostListPostSerializer uses Post.url without share_url/without_slug:
+    // /t/{slug}/{topic_id}/{post_number}, including an explicit /1 for the OP.
+    const match: RegExpMatchArray | null = route.match(/^\/t\/[^/]+\/(\d+)\/(\d+)\/?$/);
+    const topicId: number = numberValue(post.topic_id);
+    if (match === null || Number(match[1]) !== topicId || !Number.isSafeInteger(topicId) || topicId <= 0) {
+      throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, 'Boost 记录缺少可确认的话题楼层，请重试');
+    }
+    const floor: number = Number(match[2]);
+    if (!Number.isSafeInteger(floor) || floor < 1) {
+      throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, 'Boost 记录的楼层无效，请重试');
+    }
+    return floor;
+  }
   async fetchProfile(username: string, section: ProfileSection, cursor: number = 0,
     order: ProfileOrder = ProfileOrder.Latest, filter: NotificationFilter = NotificationFilter.All,
-    cancellation?: RequestCancellation): Promise<ProfilePage> {
+    cancellation?: RequestCancellation, boostDirection: ProfileBoostDirection = ProfileBoostDirection.Given): Promise<ProfilePage> {
     validateCursor(cursor);
     if (!username.trim() || username.length > 200 || order !== ProfileOrder.Latest) {
       throw new ForumApiError(ForumErrorKind.Rejected, 0, '无效的社区用户');
     }
     const path: string = encodeURIComponent(username);
     const empty: ProfilePage = { fields: [], entries: [], hasMore: false, nextCursor: cursor };
+    if (section === ProfileSection.Votes) {
+      const generation: number = this.sessionGeneration;
+      // TopicQueryExtension.list_voted_by selects this user's unarchived topic votes.
+      // It is not a history of votes cast inside poll posts.
+      const raw: string = await this.readProfilePlugin(`/topics/voted-by/${path}.json?page=${cursor}`, '话题投票记录', cancellation);
+      this.ensureSessionGeneration(generation);
+      if (cancellation?.isCancelled) { throw cancelledError(); }
+      const page: TopicPage = this.topicPage(this.parse<TopicListResponseWire>(raw));
+      const entries: ProfileEntry[] = page.items.map((item: TopicListItem): ProfileEntry => {
+        if (!Number.isSafeInteger(item.topic.id) || item.topic.id <= 0) {
+          throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区返回了无效的话题投票记录');
+        }
+        return { id: `vote:${item.topic.id}`, title: item.topic.title,
+          subtitle: ['有效话题投票', item.topic.lastPostedAt ? '话题更新于 ' + item.topic.lastPostedAt.slice(0, 10) : '']
+            .filter((value: string): boolean => value.length > 0).join(' · '),
+          topicId: item.topic.id, postNumber: 1, unread: false, notificationType: 0,
+          actor: item.authorUsername, avatarUrl: item.avatarUrl };
+      });
+      return { fields: [], entries: entries, hasMore: page.hasMore, nextCursor: cursor + 1 };
+    }
+    if (section === ProfileSection.Solutions) {
+      const generation: number = this.sessionGeneration;
+      // SolvedTopicsController.by_user joins accepted answer_post_id and filters
+      // the answer author's user_id. Solved participation is not this record.
+      const raw: string = await this.readProfilePlugin(`/solution/by_user.json?username=${path}&offset=${cursor}&limit=30`, '被采纳方案记录', cancellation);
+      this.ensureSessionGeneration(generation);
+      if (cancellation?.isCancelled) { throw cancelledError(); }
+      const response: ProfileSolvedResponseWire = this.parse<ProfileSolvedResponseWire>(raw);
+      if (!Array.isArray(response.user_solved_posts)) {
+        throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区未返回被采纳方案记录，请重试');
+      }
+      const posts: ProfileSolvedPostWire[] = response.user_solved_posts;
+      const entries: ProfileEntry[] = posts.map((post: ProfileSolvedPostWire): ProfileEntry => {
+        const postId: number = numberValue(post.post_id);
+        const topicId: number = numberValue(post.topic_id);
+        const floor: number = numberValue(post.post_number);
+        if (!Number.isSafeInteger(postId) || postId <= 0 || !Number.isSafeInteger(topicId) || topicId <= 0 ||
+          !Number.isSafeInteger(floor) || floor <= 0 || text(post.username).toLocaleLowerCase() !== username.toLocaleLowerCase()) {
+          throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '方案记录的作者或楼层无法确认，请重试');
+        }
+        return { id: `solution:${postId}`, title: plainText(text(post.topic_title)) || '被采纳的方案',
+          subtitle: ['已被采纳', `#${floor}`, plainText(text(post.excerpt) || text(post.cooked) || text(post.raw)),
+            text(post.created_at) ? '回复于 ' + text(post.created_at).slice(0, 10) : '']
+            .filter((value: string): boolean => value.length > 0).join(' · '),
+          topicId: topicId, postNumber: floor, unread: false, notificationType: 0,
+          actor: text(post.username), avatarUrl: avatarUrlOf(text(post.avatar_template)) };
+      });
+      return { fields: [], entries: entries, hasMore: posts.length >= 30, nextCursor: cursor + posts.length };
+    }
+    if (section === ProfileSection.Boosts) {
+      if (boostDirection !== ProfileBoostDirection.Given && boostDirection !== ProfileBoostDirection.Received) {
+        throw new ForumApiError(ForumErrorKind.Rejected, 0, 'Boost 记录类型无效');
+      }
+      const generation: number = this.sessionGeneration;
+      const before: string = cursor > 0 ? `?before_boost_id=${cursor}` : '';
+      const route: string = `/discourse-boosts/users/${path}/boosts-${boostDirection}.json${before}`;
+      const raw: string = await this.readProfilePlugin(route, 'Boost 记录', cancellation);
+      this.ensureSessionGeneration(generation);
+      if (cancellation?.isCancelled) { throw cancelledError(); }
+      const response: ProfileBoostsResponseWire = this.parse<ProfileBoostsResponseWire>(raw);
+      if (!Array.isArray(response.boosts)) {
+        throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区未返回 Boost 记录，请重试');
+      }
+      const boosts: ProfileBoostEntryWire[] = response.boosts;
+      let nextCursor: number = 0;
+      const entries: ProfileEntry[] = boosts.map((boost: ProfileBoostEntryWire): ProfileEntry => {
+        const id: number = numberValue(boost.id);
+        const post: ProfileBoostPostWire | undefined = boost.post;
+        if (!Number.isSafeInteger(id) || id <= 0 || (cursor > 0 && id >= cursor) || post === undefined) {
+          throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, 'Boost 分页结果无效，请重试');
+        }
+        const given: boolean = boostDirection === ProfileBoostDirection.Given;
+        const owner: string = given ? text(boost.user?.username) : text(post.username);
+        if (owner.toLocaleLowerCase() !== username.toLocaleLowerCase()) {
+          throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, 'Boost 记录与当前账号不符，请重试');
+        }
+        const floor: number = this.boostPostFloor(post);
+        const actor: string = given ? text(post.username) : text(boost.user?.username);
+        nextCursor = nextCursor === 0 ? id : Math.min(nextCursor, id);
+        return { id: `boost:${id}`, title: plainText(text(post.topic_title)) || 'Boost',
+          subtitle: [given ? `发给 @${actor}` : `来自 @${actor}`, plainText(text(boost.cooked) || text(boost.raw)),
+            `#${floor}`, text(boost.created_at).slice(0, 10)].filter((value: string): boolean => value.length > 0).join(' · '),
+          topicId: numberValue(post.topic_id), postNumber: floor, unread: false, notificationType: 0, actor: actor,
+          avatarUrl: avatarUrlOf(given ? text(post.avatar_template) : text(boost.user?.avatar_template)) };
+      });
+      return { fields: [], entries: entries, hasMore: boosts.length >= 20 && nextCursor > 0,
+        nextCursor: nextCursor > 0 ? nextCursor : cursor };
+    }
     if (section === ProfileSection.Summary) {
       const response: SummaryResponseWire = this.parse<SummaryResponseWire>(await this.get(`/u/${path}/summary.json`, cancellation));
-      const summary: SummaryWire = response.user_summary ?? {};
+      if (!response.user_summary) { throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区未返回个人统计'); }
+      const summary: SummaryWire = response.user_summary;
       const fields: ProfileField[] = [
         { label: '访问天数', value: metric(summary.days_visited) },
         { label: '阅读时长', value: typeof summary.time_read === 'number' ? Math.floor(summary.time_read / 60) + ' 分钟' : '—' },
@@ -909,16 +1304,53 @@ export class ForumApi {
       });
       return { fields: [], entries: entries, hasMore: page.hasMore, nextCursor: page.nextOffset };
     }
-    if (section === ProfileSection.Messages) {
-      const page: TopicPage = this.topicPage(this.parse<TopicListResponseWire>(await this.get(`/topics/private-messages/${path}.json?page=${cursor}`, cancellation)));
+    if (section === ProfileSection.Bookmarks) {
+      // UsersController returns { bookmarks: [] } for an empty list, and the
+      // UserBookmarkListSerializer root for a populated page. Never infer empty
+      // from an absent list, or follow a server-provided URL with credentials.
+      const response: BookmarksResponseWire = this.parse<BookmarksResponseWire>(await this.get(`/u/${path}/bookmarks.json?page=${cursor}`, cancellation));
+      const bookmarks: BookmarkWire[] | undefined = response.user_bookmark_list?.bookmarks ?? response.bookmarks;
+      if (!Array.isArray(bookmarks)) { throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区未返回收藏列表'); }
+      const entries: ProfileEntry[] = bookmarks.map((bookmark: BookmarkWire): ProfileEntry => {
+        if (!Number.isSafeInteger(bookmark.id) || numberValue(bookmark.id) <= 0) {
+          throw new ForumApiError(ForumErrorKind.InvalidResponse, 0, '社区返回了无效收藏');
+        }
+        const topicId: number = numberValue(bookmark.topic_id);
+        const available: boolean = topicId > 0 && !bookmark.deleted && !bookmark.hidden;
+        const lastRead: number = Math.max(0, numberValue(bookmark.last_read_post_number));
+        const linked: number = Math.max(1, numberValue(bookmark.linked_post_number, 1));
+        const floor: number = bookmark.bookmarkable_type === 'Topic' ? lastRead + 1 : linked;
+        const highest: number = numberValue(bookmark.highest_post_number, floor);
+        return { id: `bookmark:${bookmark.id}`, title: plainText(text(bookmark.title) || text(bookmark.fancy_title)) || '收藏',
+          subtitle: [text(bookmark.name), plainText(text(bookmark.excerpt)),
+            !available ? (bookmark.deleted || bookmark.hidden ? '原内容暂不可用' : '此类收藏请在社区网页查看') : '',
+            text(bookmark.created_at).slice(0, 10)].filter((part: string): boolean => part.length > 0).join(' · '),
+          topicId: available ? topicId : 0, unread: false, notificationType: 0,
+          avatarUrl: bookmark.user ? avatarUrlOf(text(bookmark.user.avatar_template), 72) : '',
+          actor: text(bookmark.user?.username), postNumber: Math.max(1, Math.min(floor, highest)) };
+      });
+      return { fields: [], entries: entries,
+        hasMore: bookmarks.length > 0 && text(response.user_bookmark_list?.more_bookmarks_url).length > 0,
+        nextCursor: cursor + 1 };
+    }
+    if (section === ProfileSection.Messages || section === ProfileSection.Read) {
+      // /read is the authenticated user's server-side history, ordered by
+      // TopicQuery.list_read's last_visited_at, not a local synthetic log.
+      const endpoint: string = section === ProfileSection.Read ? `/read.json?page=${cursor}` : `/topics/private-messages/${path}.json?page=${cursor}`;
+      const response: TopicListResponseWire = this.parse<TopicListResponseWire>(await this.get(endpoint, cancellation));
+      const page: TopicPage = this.topicPage(response);
       const entries: ProfileEntry[] = page.items.map((item: TopicListItem): ProfileEntry => {
+        const lastRead: number = numberValue(response.topic_list?.topics?.find((wire: TopicWire): boolean => wire.id === item.topic.id)?.last_read_post_number, 1);
         return { id: String(item.topic.id), title: item.topic.title, subtitle: `${item.topic.replyCount} 回复 · ${item.topic.lastPostedAt.slice(0, 10)}`,
-          topicId: item.topic.id, unread: item.topic.unseen, notificationType: 0, avatarUrl: item.avatarUrl, actor: item.authorUsername, postNumber: 0 };
+          topicId: item.topic.id, unread: item.topic.unseen, notificationType: 0, avatarUrl: item.avatarUrl, actor: item.authorUsername,
+          postNumber: section === ProfileSection.Read ? Math.max(1, lastRead) : 1 };
       });
       return { fields: [], entries: entries, hasMore: page.hasMore, nextCursor: cursor + 1 };
     }
-    // Discourse UserAction LIKE=1 means likes given; notifications are likes received.
-    const actionFilter: string = section === ProfileSection.Likes ? '&filter=1' : '';
+    // Official Discourse UserAction: LIKE=1, NEW_TOPIC=4 and REPLY=5.
+    // The filter is server-side so each view has its own complete pagination.
+    const actionFilter: string = section === ProfileSection.Likes ? '&filter=1' :
+      section === ProfileSection.Topics ? '&filter=4' : section === ProfileSection.Replies ? '&filter=5' : '';
     const response: ActionsResponseWire = this.parse<ActionsResponseWire>(await this.get(`/user_actions.json?username=${path}&offset=${cursor * 30}&limit=30${actionFilter}`, cancellation));
     if (!Array.isArray(response.user_actions)) {
       throw new ForumApiError(ForumErrorKind.InvalidResponse, 0,
@@ -929,6 +1361,7 @@ export class ForumApi {
       const labels: Record<string, string> = { '1': '点赞', '2': '收到赞', '4': '发表话题', '5': '回复', '6': '收到回复', '7': '被提及', '9': '引用', '11': '消息', '12': '消息' };
       const label: string = labels[String(numberValue(action.action_type))] ?? '活动';
       return { id: section === ProfileSection.Likes ? `like:${numberValue(action.post_id)}:${text(action.created_at)}` :
+          section === ProfileSection.Topics || section === ProfileSection.Replies ? `${section}:${numberValue(action.post_id)}:${text(action.created_at)}` :
           `${cursor * 30 + index}:${numberValue(action.post_id)}`, title: plainText(text(action.title)) || '社区活动',
         subtitle: [label, plainText(text(action.excerpt)), text(action.created_at).slice(0, 10)].filter((value: string): boolean => value.length > 0).join(' · '),
         topicId: numberValue(action.topic_id), unread: false, notificationType: 0, avatarUrl: '', actor: '', postNumber: numberValue(action.post_number) };

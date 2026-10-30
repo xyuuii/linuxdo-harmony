@@ -3,6 +3,7 @@ import { forumApi, RequestCancellation, ForumApiError } from '../services/ForumA
 
 @ObservedV2
 export class ForumSession {
+  @Trace foreground: boolean = false;
   @Trace user: DiscourseUser | undefined = undefined;
   @Trace unread: number = 0;
   @Trace loading: boolean = false;

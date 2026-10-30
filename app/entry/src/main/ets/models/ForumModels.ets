@@ -19,7 +19,10 @@ export interface Topic {
   tags: string[];
   lastPosterUsername: string;
   posters: Poster[];
+  lastReadPostNumber?: number;
+  highestPostNumber?: number;
 }
+export interface TopicBrowseOptions { categoryId: number; tagName: string; sortOrder: string; topPeriod: string; }
 export interface DiscourseUser {
   id: number;
   username: string;
@@ -62,7 +65,12 @@ export interface Reaction { id: string; count: number; canUndo: boolean; }
 export interface Boost { id: number; cooked: string; user?: DiscourseUser; canDelete: boolean; }
 export interface Post {
   id: number;
+  version?: number;
+  canViewEditHistory?: boolean;
+  bookmarked?: boolean;
+  bookmarkId?: number;
   username: string;
+  displayName?: string;
   avatarTemplate: string;
   avatarUrl: string;
   postNumber: number;
@@ -83,9 +91,10 @@ export interface Post {
   canEdit: boolean;
   canDelete: boolean;
   raw: string;
+  flagTypes?: number[];
 }
 export interface PostStream { posts: Post[]; stream: number[]; }
-export interface TopicDetails { canCreatePost: boolean; }
+export interface TopicDetails { canCreatePost: boolean; notificationLevel?: number; }
 export interface TopicDetail {
   id: number;
   title: string;
@@ -103,10 +112,19 @@ export interface TopicDetail {
 export enum SearchOrder {
   Relevance = '', Latest = 'latest', Likes = 'likes', Views = 'views', LatestTopic = 'latest_topic', Read = 'read'
 }
-export interface SearchPage { items: TopicListItem[]; excerpts: Map<number, string>; hasMore: boolean; }
-export enum ProfileSection {
-  Summary = 'summary', Activity = 'activity', Likes = 'likes', Notifications = 'notifications', Messages = 'messages', Account = 'account'
+export interface ForumSearchPostMatch {
+  id: string; topicId: number; postNumber: number; username: string; avatarUrl: string; excerpt: string; createdAt: string;
 }
+export interface SearchPage {
+  items: TopicListItem[]; excerpts: Map<number, string>; hasMore: boolean;
+  postNumbers?: Map<number, number>; postMatches?: ForumSearchPostMatch[];
+}
+export enum ProfileSection {
+  Summary = 'summary', Activity = 'activity', Likes = 'likes', Notifications = 'notifications', Messages = 'messages', Account = 'account',
+  Bookmarks = 'bookmarks', Topics = 'topics', Replies = 'replies', Read = 'read', Drafts = 'drafts',
+  Votes = 'votes', Solutions = 'solutions', Boosts = 'boosts'
+}
+export enum ProfileBoostDirection { Given = 'given', Received = 'received' }
 export enum NotificationFilter { All = 'all', Replies = 'replies', Likes = 'likes', Messages = 'messages' }
 export enum ProfileOrder { Latest = 'latest' }
 export interface SearchOrderOption { value: SearchOrder; key: string; label: string; }

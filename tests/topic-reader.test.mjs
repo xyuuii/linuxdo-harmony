@@ -51,12 +51,15 @@ const declarations = extract(topicSource, 'export interface TopicTreeRow', '@Com
 const prefix = extract(topicSource, 'export struct TopicPage', '  @Builder\n');
 // Include the actual viewer-close and native-Back closures from build(), so the
 // tests exercise the same closing paths while avoiding ArkUI builder syntax.
-const close = /onClose: \(\): void => \{([^\n]*)\}/.exec(topicSource);
+const close = /onClose: \(\): void => \{([^\n]*)\}/.exec(topicSource.slice(topicSource.indexOf('ForumImageViewer({')));
 const back = /\.onBackPressed\(\(\): boolean => \{([^\n]*)\}/.exec(topicSource);
 const hide = /\.onHidden\(\(\) => \{([\s\S]*?)\}\)/.exec(topicSource);
 const shown = /\.onShown\(\(\) => \{([\s\S]*?)\}\)/.exec(topicSource);
+const viewport = /\.onScrollIndex\(\(_start: number, _end: number, center: number\): void => \{([\s\S]*?)\}\)/.exec(topicSource);
 assert.ok(close && back && hide && shown, 'Production viewer-close, native-Back and navigation lifecycle handlers must remain extractable.');
+assert.ok(viewport, 'Execute the actual native viewport-index callback.');
 const pageClass = (prefix + `\ncloseFromViewer(): void {${close[1]}}\nbackFromViewer(): boolean {${back[1]}}` +
+  `\nnativeIndexChanged(start: number, end: number, center: number): void {${viewport[1]}}` +
   `\nhideFromNavigation(): void {${hide[1]}}\nshowFromNavigation(): void {${shown[1]}}\n}\n`)
   .replace('export struct TopicPage', 'export class TopicPage')
   .replace(/^\s*@(?:Computed|Monitor\([^\n]*\))\s*\n/gm, '\n')
@@ -148,6 +151,49 @@ test('reader floor progress uses the full highest floor and stays bounded across
   page.topic = { postStream: { stream: [1, 22] } };
   assert.equal(page.totalFloors, 42, 'Loaded floor numbers can exceed the stream count after deleted posts.');
   assert.equal(page.topicReplyCount, 1);
+});
+
+test('reading progress uses the native viewport anchor instead of a barely visible trailing nested reply', () => {
+  const { page } = readerRuntime();
+  page.rows = [1, 7, 8, 9, 16, 23].map(number => ({ post: { id: number + 100, postNumber: number } }));
+  page.currentNumber = 7;
+  page.nativeIndexChanged(3, 6, 4);
+  assert.equal(page.currentNumber, 8, 'Native center 4 maps through two leading controls to actual floor 8.');
+  page.nativeIndexChanged(3, 7, 4);
+  assert.equal(page.currentNumber, 8, 'A newly appearing bottom reply cannot take over an unchanged reading anchor.');
+  page.rows = [1, 147, 9, 196].map(number => ({ post: { id: number + 200, postNumber: number } }));
+  page.nativeIndexChanged(2, 5, 3);
+  assert.equal(page.currentNumber, 147, 'Visual tree order is not numeric floor order or a List index.');
+});
+
+test('explicit floor navigation keeps its target through programmatic layout and releases only on real user movement', () => {
+  const { page } = readerRuntime();
+  page.rows = [1, 7, 8, 9, 16].map(number => ({ post: { id: number + 100, postNumber: number } }));
+  page.pendingNumber = 7;
+  page.locatePending();
+  assert.equal(page.currentNumber, 7); assert.equal(page.highlightedId, 107);
+  assert.deepEqual(page.scroller.indexCalls, [[3, false, 'start']]);
+  page.nativeIndexChanged(3, 6, 4);
+  assert.equal(page.currentNumber, 7, 'Initial layout cannot replace a just-requested floor with another visible reply.');
+  page.readScroll(25, ScrollState.Scroll, ScrollSource.SCROLLER);
+  assert.equal(page.currentNumber, 7, 'Programmatic scrolling preserves the explicit destination.');
+  page.readScroll(0, ScrollState.Scroll, ScrollSource.DRAG);
+  assert.equal(page.currentNumber, 7, 'A touch without movement is not new reading.');
+  page.readScroll(5, ScrollState.Scroll, ScrollSource.DRAG);
+  assert.equal(page.currentNumber, 8);
+  assert.equal(page.highlightedId, 107, 'The blue requested-floor marker retains its independent navigation meaning.');
+});
+
+test('status/footer rows, invalid native indices and covered readers cannot fabricate a new reading floor', () => {
+  const { page } = readerRuntime();
+  page.rows = [1, 7, 16].map(number => ({ post: { id: number + 100, postNumber: number } }));
+  page.currentNumber = 7;
+  for (const index of [-1, 0, 1, 5, 6, 2.5, NaN, Infinity]) {
+    page.nativeIndexChanged(0, 6, index); assert.equal(page.currentNumber, 7);
+  }
+  for (const state of ['showPicture', 'readerCovered', 'showJump', 'showTopicOptions', 'showFlag', 'showHistory', 'sharingPanelOpen']) {
+    page[state] = true; page.nativeIndexChanged(2, 4, 4); assert.equal(page.currentNumber, 7, state); page[state] = false;
+  }
 });
 
 test('reader category metadata uses the cached nested category and ignores late responses after ownership or navigation changes', async () => {

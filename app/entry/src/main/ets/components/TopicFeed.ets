@@ -3,12 +3,17 @@ import { forumApi, ForumApiError, ForumErrorKind, RequestCancellation } from '..
 import { AppearanceSettings } from '../models/AppearanceSettings';
 import { TopicRow, PinnedTopicsBlock, ForumErrorView } from './ForumComponents';
 import { splitTopicFeed, TopicFeedSections } from '../services/TopicFeedPresentation';
+import { firstUnreadPostNumber } from '../services/ReadingPreferences';
 
 @ComponentV2
 export struct TopicFeed {
   @Param title: string = '最新';
   @Param categoryId: number = 0;
   @Param categorySlug: string = '';
+  @Param browseCategoryId: number = 0;
+  @Param tagName: string = '';
+  @Param sortOrder: string = '';
+  @Param topPeriod: string = 'weekly';
   @Param reloadSignal: number = 0;
   @Param refreshTopSignal: number = 0;
   @Param active: boolean = true;
@@ -41,6 +46,17 @@ export struct TopicFeed {
 
   @Computed
   get sections(): TopicFeedSections { return splitTopicFeed(this.items); }
+
+  private openItem(item: TopicListItem): void {
+    this.onOpenTopic(item.topic.id, firstUnreadPostNumber(item.topic.lastReadPostNumber ?? 0,
+      item.topic.highestPostNumber ?? item.topic.postsCount, this.appearance.openAtUnread));
+  }
+
+  @Monitor('browseCategoryId', 'tagName', 'sortOrder', 'topPeriod')
+  browseChanged(): void {
+    this.onReload();
+    try { this.listScroller.scrollEdge(Edge.Top); } catch (_) {}
+  }
 
   @Monitor('refreshTopSignal', 'active')
   refreshLatestFromTop(): void {
@@ -177,7 +193,8 @@ export struct TopicFeed {
     try {
       const result: TopicPage = this.categoryId > 0 ?
         await forumApi.fetchCategoryTopics(this.categorySlug, this.categoryId, page, token) :
-        await forumApi.fetchTopicFeed(filter, page, token);
+        await forumApi.fetchTopicFeed(filter, page, token, { categoryId: this.browseCategoryId,
+          tagName: this.tagName, sortOrder: this.sortOrder, topPeriod: this.topPeriod });
       if (this.generation !== generation) { return; }
       const combined: TopicListItem[] = reset ? result.items : this.items.concat(result.items);
       const seen: Set<number> = new Set<number>();
@@ -224,7 +241,7 @@ export struct TopicFeed {
     Column() {
       Refresh({ refreshing: this.refreshing }) {
         List({ scroller: this.listScroller, space: 0 }) {
-          if (this.categoryId === 0) {
+          if (this.categoryId === 0 && !this.immersiveTop && !this.tagName) {
             ListItem() {
               Row() {
                 Button({ type: ButtonType.Normal, buttonStyle: ButtonStyleMode.TEXTUAL }) {
@@ -247,13 +264,12 @@ export struct TopicFeed {
             }, (row: number): string => `feed_loading_${row}`)
           }
           if (this.sections.pinned.length > 0) {
-            ListItem() {
-              PinnedTopicsBlock({ items: this.sections.pinned,
-                onOpen: (id: number): void => { this.onOpenTopic(id, 1); } })
-            }
+            ForEach(this.sections.pinned, (item: TopicListItem) => {
+              ListItem() { TopicRow({ item: item, onOpen: (): void => { this.openItem(item); } }) }
+            }, (item: TopicListItem): string => JSON.stringify(item))
           }
           ForEach(this.sections.topics, (item: TopicListItem) => {
-            ListItem() { TopicRow({ item: item, onOpen: (id: number): void => { this.onOpenTopic(id, 1); } }) }
+            ListItem() { TopicRow({ item: item, onOpen: (): void => { this.openItem(item); } }) }
           }, (item: TopicListItem): string => JSON.stringify(item))
           ListItem() {
             if (this.error.length > 0) {
