@@ -15,7 +15,8 @@ const ts = require(compiler);
 const compiled = new Map();
 function load(name, modules, globals = {}) {
   if (!compiled.has(name)) {
-    const source = readFileSync(new URL(`../app/entry/src/main/ets/services/${name}.ets`, import.meta.url), 'utf8');
+    const path = name.startsWith('models/') ? name : `services/${name}`;
+    const source = readFileSync(new URL(`../app/entry/src/main/ets/${path}.ets`, import.meta.url), 'utf8');
     compiled.set(name, ts.transpileModule(source, { compilerOptions: {
       target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.CommonJS
     } }).outputText);
@@ -29,11 +30,28 @@ function load(name, modules, globals = {}) {
     (module, module.exports, nativeRequire, ...Object.values(globals));
   return module.exports;
 }
+// Real local data modules remain inside the allowlist; native/network imports
+// below still fail closed unless the transport fixture explicitly provides them.
+const forumModels = load('models/ForumModels', {});
+const forumWire = load('ForumWire', { '../models/ForumModels': forumModels });
+const userProfileModels = load('models/UserProfileModels', { './ForumModels': forumModels });
+const userProfileWire = load('UserProfileWire', {
+  '../models/ForumModels': forumModels, '../models/UserProfileModels': userProfileModels, './ForumWire': forumWire
+});
+const directoryModels = load('models/DirectoryModels', { './ForumModels': forumModels });
+const directoryWire = load('DirectoryWire', { '../models/DirectoryModels': directoryModels, './ForumWire': forumWire });
+const postRevisionModels = load('models/PostRevisionModels', { './ForumModels': forumModels });
+const postRevisionWire = load('PostRevisionWire', {
+  '../models/ForumModels': forumModels, '../models/PostRevisionModels': postRevisionModels
+});
 const apiExports = load('ForumApi', {
   '@kit.ArkTS': { url: { URL } },
   '@kit.NetworkKit': { http: { RequestMethod: { GET: 'GET', POST: 'POST', PUT: 'PUT', DELETE: 'DELETE' } } },
   '@kit.ArkWeb': { webview: {} }, '@kit.BasicServicesKit': {},
-  '../models/ForumModels': {}, './ForumWire': {}
+  '../models/ForumModels': {}, './ForumWire': {},
+  '../models/UserProfileModels': userProfileModels, './UserProfileWire': userProfileWire,
+  '../models/DirectoryModels': directoryModels, './DirectoryWire': directoryWire,
+  '../models/PostRevisionModels': postRevisionModels, './PostRevisionWire': postRevisionWire
 });
 const { ForumApi, RequestCancellation, ForumErrorKind: Kind } = apiExports;
 const policy = load('BrowserMediaPolicy', { '@kit.ArkTS': { url: { URL } } });

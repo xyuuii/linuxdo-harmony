@@ -2,6 +2,8 @@ import { uiMaterial } from '@kit.ArkUI';
 import { AppearanceSettings, appearanceStorageStatus } from '../models/AppearanceSettings';
 import { EffectPreset, effectPresets, materialFor } from '../services/MaterialPolicy';
 import { MaterialPreview } from '../components/MaterialPreview';
+import { TopicFeedFilterOption, topicFeedFilters } from '../models/ForumModels';
+import { defaultTopicFeedIndex, defaultTopicFeedValue } from '../services/ReadingPreferences';
 
 @ComponentV2
 export struct AppearancePage {
@@ -87,6 +89,45 @@ export struct AppearancePage {
           Text('阅读').fontSize(20).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary')).width('100%')
           Row({ space: 14 }) {
             Column({ space: 6 }) {
+              Text('默认话题列表').fontSize(17).fontColor($r('app.color.text_primary'))
+              Text('下次打开应用时显示的列表。').fontSize(13)
+                .fontColor($r('app.color.text_secondary')).lineHeight(20)
+            }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+            Select(topicFeedFilters.map((option: TopicFeedFilterOption): SelectOption => { return { value: option.label }; }))
+              .selected(defaultTopicFeedIndex(this.appearance.defaultFeed))
+              .value(topicFeedFilters[defaultTopicFeedIndex(this.appearance.defaultFeed)].label)
+              .font({ size: 14 }).fontColor($r('app.color.accent')).backgroundColor(Color.Transparent)
+              .onSelect((index: number): void => { this.appearance.defaultFeed = defaultTopicFeedValue(index); })
+              .id('default_topic_feed').accessibilityText('默认话题列表')
+              .systemMaterial(uiMaterial.Material.empty)
+          }
+          Divider().color($r('app.color.divider'))
+          Row({ space: 14 }) {
+            Column({ space: 6 }) {
+              Text('沉浸话题').fontSize(17).fontColor($r('app.color.text_primary'))
+              Text('向下阅读时收起操作栏，反向滚动时展开。').fontSize(13)
+                .fontColor($r('app.color.text_secondary')).lineHeight(20)
+            }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+            Toggle({ type: ToggleType.Switch, isOn: this.appearance.immersiveTopics })
+              .selectedColor($r('app.color.accent')).id('immersive_topics').accessibilityText('沉浸话题')
+              .onChange((value: boolean): void => { this.appearance.immersiveTopics = value; })
+              .systemMaterial(materialFor(this.appearance))
+          }
+          Divider().color($r('app.color.divider'))
+          Row({ space: 14 }) {
+            Column({ space: 6 }) {
+              Text('打开首个未读').fontSize(17).fontColor($r('app.color.text_primary'))
+              Text('从话题列表进入时，继续上次阅读的位置。').fontSize(13)
+                .fontColor($r('app.color.text_secondary')).lineHeight(20)
+            }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+            Toggle({ type: ToggleType.Switch, isOn: this.appearance.openAtUnread })
+              .selectedColor($r('app.color.accent')).id('open_at_unread').accessibilityText('打开首个未读')
+              .onChange((value: boolean): void => { this.appearance.openAtUnread = value; })
+              .systemMaterial(materialFor(this.appearance))
+          }
+          Divider().color($r('app.color.divider'))
+          Row({ space: 14 }) {
+            Column({ space: 6 }) {
               Text('楼中楼').fontSize(17).fontColor($r('app.color.text_primary'))
               Text('按回复关系排列，默认预览 3 条子回复。').fontSize(13)
                 .fontColor($r('app.color.text_secondary')).lineHeight(20)
@@ -111,7 +152,7 @@ export struct AppearancePage {
           Text('设置暂时无法保存，重新打开应用后可能恢复默认。')
             .fontSize(13).lineHeight(20).fontColor($r('app.color.text_secondary')).id('storage_unavailable')
         }
-        Button('恢复默认外观', { type: ButtonType.Capsule })
+        Button('恢复默认设置', { type: ButtonType.Capsule })
           .height(48).width('100%').fontSize(15).fontColor($r('app.color.accent'))
           .backgroundColor($r('app.color.surface')).id('reset_appearance')
           .onClick(() => {
@@ -121,6 +162,9 @@ export struct AppearancePage {
             this.appearance.themeMode = 0;
             this.appearance.treeView = true;
             this.appearance.autoRefresh = false;
+            this.appearance.defaultFeed = 'latest';
+            this.appearance.immersiveTopics = false;
+            this.appearance.openAtUnread = true;
           }).systemMaterial(uiMaterial.Material.empty)
       }.width('100%').constraintSize({ maxWidth: 600 }).padding({ left: 24, right: 24, bottom: 112 })
     }.width('100%').height('100%').scrollBar(BarState.Off)

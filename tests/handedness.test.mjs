@@ -100,12 +100,16 @@ test('an unsubscribe failure does not create duplicate registrations and late ca
 
 test('EntryAbility starts in foreground and stops on background, stage destruction and ability destruction', () => {
   const events = [];
+  const session = { foreground: false };
   const exports = load(source('entryability/EntryAbility'), {
     UIAbility: class {}, handednessState: { start: () => events.push('start'), stop: () => events.push('stop') },
-    hilog: { info() {} }, forumApi: { setForeground: active => events.push(active ? 'network-foreground' : 'network-background') }
+    hilog: { info() {} }, forumSession: session,
+    forumApi: { setForeground: active => events.push(active ? 'network-foreground' : 'network-background') }
   });
   const ability = new exports.default();
-  ability.onForeground(); ability.onBackground(); ability.onWindowStageDestroy(); ability.onDestroy();
+  ability.onForeground(); assert.equal(session.foreground, true);
+  ability.onBackground(); assert.equal(session.foreground, false);
+  ability.onWindowStageDestroy(); ability.onDestroy();
   assert.deepEqual(events, ['network-foreground', 'start', 'network-background', 'stop', 'stop', 'stop']);
 });
 

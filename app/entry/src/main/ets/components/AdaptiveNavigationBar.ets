@@ -26,7 +26,7 @@ export struct AdaptiveNavigationBar {
   private suppressDoubleTapUntil: number = 0;
   private readonly entries: NavigationEntry[] = [
     { index: 0, title: '话题', symbol: $r('sys.symbol.message') },
-    { index: 1, title: '分类', symbol: $r('sys.symbol.square_grid_2x2') },
+    { index: 1, title: '目录', symbol: $r('sys.symbol.square_grid_2x2') },
     { index: 2, title: '搜索', symbol: $r('sys.symbol.magnifyingglass') },
     { index: 3, title: '消息', symbol: $r('sys.symbol.bell') },
     { index: 4, title: '我的', symbol: $r('sys.symbol.person') }

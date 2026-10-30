@@ -291,6 +291,9 @@ function composerRuntime() {
   const calls = [];
   const session = { user: { id: 1 }, revision: 0 };
   const forbidden = () => { throw new Error('Native I/O is prohibited in this test.'); };
+  // Load the actual repository helpers and a fresh production attachment Map
+  // for each fixture. Native preferences and file-picker access stay forbidden.
+  const draftRepository = load(withoutImports(source('services/DraftRepository')));
   const api = {
     async fetchTopic(...args) { calls.push({ method: 'fetchTopic', args }); return { canReply: true }; },
     async fetchPosts(...args) { calls.push({ method: 'fetchPosts', args }); return []; },
@@ -310,7 +313,7 @@ function composerRuntime() {
     .replace(/^\s*@(?:Computed|Monitor\([^\n]*\))\s*\n/gm, '\n')
     .replace(/@(Param|Event|Local) /g, '');
   const exports = load(plainClass, {
-    forumApi: api, forumSession: session, RequestCancellation: cancellation.RequestCancellation,
+    ...draftRepository, forumApi: api, forumSession: session, RequestCancellation: cancellation.RequestCancellation,
     loadAppearanceSettings: () => ({}), setTimeout, clearTimeout,
     preferences: { getPreferences: forbidden }, fileIo: { open: forbidden },
     picker: { DocumentViewPicker: forbidden }, photoAccessHelper: { PhotoViewPicker: forbidden }

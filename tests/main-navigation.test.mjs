@@ -38,10 +38,12 @@ const notificationsEnd = indexSource.indexOf('  private openCategory(', notifica
 assert.ok(notificationsStart >= 0 && notificationsEnd > notificationsStart);
 const notificationNavigation = indexSource.slice(notificationsStart, notificationsEnd);
 const { TopicScrollPolicy } = load(readSource('services/TopicScrollPolicy'));
+const readingPreferences = load(readSource('services/ReadingPreferences').replace(/^import .*;\n/gm, ''),
+  load(readSource('models/ForumModels')));
 const ScrollSource = { DRAG: 1, FLING: 2, OTHER_USER_INPUT: 3, SCROLLER: 4, SCROLLER_ANIMATION: 5, NONE: 0 };
 const ScrollState = { Scroll: 1, Fling: 2, Idle: 0 };
 const { IndexNavigation } = load(`export class IndexNavigation {\n${methods}\n${notificationNavigation}\n}`, {
-  ScrollSource
+  ScrollSource, shouldCollapseTopicBars: readingPreferences.shouldCollapseTopicBars
 });
 
 // Only production navigation methods and the real pure scroll policy run here.
@@ -62,7 +64,7 @@ function navigationRuntime() {
     searchScroller: scrollers[2], notificationsScroller: scrollers[3], profileScroller: scrollers[4],
     navigationScrollPolicy: new TopicScrollPolicy(),
     navigationCollapsed: false, currentIndex: 0, showBrowser: false, mainPageVisible: true, topInset: 64,
-    appearance: { reduceMotion: false, highContrast: false },
+    appearance: { reduceMotion: false, highContrast: false, immersiveTopics: true },
     paths: { size: () => pathDepth, clear: () => { pathDepth = 0; routeEvents.push('clear'); } },
     controller: { changeIndex: index => { tabChanges.push(index); routeEvents.push(`tab:${index}`); } }
   });
@@ -229,4 +231,19 @@ test('notification shortcuts expose the retained messages tab and leave no dupli
     assert.strictEqual(navigation.navigationScroller(navigation.currentIndex), scrollers[3]);
     assert.equal(scrollers[3].offset, 420, 'The shortcut must preserve the retained notification list position.');
   }
+});
+
+test('home immersive preference keeps navigation visible until enabled, with accessibility overrides still taking priority', () => {
+  const { navigation } = navigationRuntime();
+  navigation.appearance.immersiveTopics = false;
+  navigation.readNavigationScroll(0, 60, ScrollState.Scroll, ScrollSource.DRAG);
+  assert.equal(navigation.navigationCollapsed, false);
+  navigation.appearance.immersiveTopics = true;
+  navigation.navigationAccessibilityChanged();
+  navigation.readNavigationScroll(0, 60, ScrollState.Scroll, ScrollSource.DRAG);
+  assert.equal(navigation.navigationCollapsed, true);
+  navigation.appearance.reduceMotion = true;
+  navigation.navigationAccessibilityChanged();
+  navigation.readNavigationScroll(0, 60, ScrollState.Scroll, ScrollSource.DRAG);
+  assert.equal(navigation.navigationCollapsed, false);
 });

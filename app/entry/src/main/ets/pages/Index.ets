@@ -10,6 +10,7 @@ import { forumApi, BrowserRequest, RequestCancellation, BrowserResponse } from '
 import { BrowserTransportAdapter } from '../services/BrowserTransportAdapter';
 import { allowedLoginNavigation, loginOrigin, loginPageTitle } from '../services/AuthNavigation';
 import { TopicScrollPolicy } from '../services/TopicScrollPolicy';
+import { shouldCollapseTopicBars } from '../services/ReadingPreferences';
 import { handednessState } from '../services/HandednessState';
 import { TopicFeed } from '../components/TopicFeed';
 import { HomeTopicFeed } from '../components/HomeTopicFeed';
@@ -29,6 +30,9 @@ import { ComposerPage } from './ComposerPage';
 import { LoginPage } from './LoginPage';
 import { AboutPage } from './AboutPage';
 import { ConnectionProbePage } from './ConnectionProbePage';
+import { DraftsPage } from './DraftsPage';
+import { DraftTarget, parseDraftTarget } from '../services/DraftRepository';
+import { UserProfilePage } from './UserProfilePage';
 
 @ObservedV2
 class ForumRoute {
@@ -41,6 +45,10 @@ class ForumRoute {
   categoryId: number = 0;
   categorySlug: string = '';
   categoryName: string = '';
+  tagName: string = '';
+  username: string = '';
+  quoteText: string = '';
+  resumeDraft: boolean = false;
   section: ProfileSection = ProfileSection.Summary;
   returnTopic: ForumRoute | undefined = undefined;
 }
@@ -53,6 +61,7 @@ struct Index {
   @Local currentIndex: number = 0;
   @Local paths: NavPathStack = new NavPathStack();
   @Local dataVersion: number = 0;
+  @Local draftsRevision: number = 0;
   @Local latestRefreshSignal: number = 0;
   @Local showBrowser: boolean = false;
   @Local showComposer: boolean = false;
@@ -127,7 +136,9 @@ struct Index {
     viewportAtTop?: boolean): void {
     if (index !== this.currentIndex) { return; }
     const blocked: boolean = !this.mainPageVisible || this.showBrowser || this.paths.size() > 0 ||
-      this.appearance.reduceMotion || this.appearance.highContrast;
+      this.appearance.reduceMotion || this.appearance.highContrast ||
+      (index === 0 && !shouldCollapseTopicBars(this.appearance.immersiveTopics,
+        this.appearance.reduceMotion, this.appearance.highContrast));
     const userDriven: boolean = source === ScrollSource.DRAG || source === ScrollSource.FLING ||
       source === ScrollSource.OTHER_USER_INPUT;
     const expanded: boolean | undefined = this.navigationScrollPolicy.update(offset, userDriven,
@@ -135,7 +146,7 @@ struct Index {
     if (expanded !== undefined) { this.setNavigationCollapsed(!expanded); }
   }
 
-  @Monitor('appearance.reduceMotion', 'appearance.highContrast')
+  @Monitor('appearance.reduceMotion', 'appearance.highContrast', 'appearance.immersiveTopics')
   navigationAccessibilityChanged(): void { this.resetNavigation(); }
 
   @Monitor('appearance.themeMode')
@@ -171,10 +182,11 @@ struct Index {
     this.pushRoute('topic', route);
   }
 
-  private compose(topicId: number, replyTo: number, postId: number, returnTopic: ForumRoute): void {
+  private compose(topicId: number, replyTo: number, postId: number, returnTopic: ForumRoute, quoteText: string = ''): void {
     if (forumSession.user === undefined) { this.openLogin(); return; }
     const route: ForumRoute = new ForumRoute();
     route.topicId = topicId; route.replyTo = replyTo; route.postId = postId;
+    route.quoteText = quoteText;
     route.returnTopic = returnTopic;
     this.presentComposer(route);
   }
@@ -219,6 +231,7 @@ struct Index {
   private closeComposer(): void { this.showComposer = false; }
 
   private composerDisappeared(): void {
+    this.draftsRevision++;
     const created: ForumRoute | undefined = this.createdTopicRoute;
     const createdForCurrentUser: boolean = this.createdTopicOwnerId > 0 &&
       this.createdTopicOwnerId === (forumSession.user?.id || 0);
@@ -239,6 +252,11 @@ struct Index {
   private composerSubmitted(number: number): void {
     const topic: ForumRoute | undefined = this.composerRoute?.returnTopic;
     if (topic !== undefined) { topic.postNumber = number; topic.replyRevision++; }
+    if (this.composerRoute?.resumeDraft && forumSession.user !== undefined) {
+      const completed: ForumRoute = new ForumRoute();
+      completed.topicId = this.composerRoute.topicId; completed.postNumber = number;
+      this.createdTopicRoute = completed; this.createdTopicOwnerId = forumSession.user.id;
+    }
   }
 
   private composerTopicCreated(topicId: number, postNumber: number): void {
@@ -258,6 +276,7 @@ struct Index {
         creatingTopic: this.composerRoute.creatingTopic,
         bottomInset: this.keyboardVisible ? 0 : this.bottomInset,
         topicId: this.composerRoute.topicId, replyTo: this.composerRoute.replyTo, postId: this.composerRoute.postId,
+        initialQuote: this.composerRoute.quoteText,
         appearance: this.appearance,
         onDismissAllowedChange: (allowed: boolean): void => { this.composerDismissAllowed = allowed; },
         onSubmitted: (number: number): void => { this.composerSubmitted(number); },
@@ -289,7 +308,22 @@ struct Index {
     if (section === ProfileSection.Notifications) { this.openNotifications(); return; }
     this.resetNavigation();
     const route: ForumRoute = new ForumRoute(); route.section = section;
-    this.pushRoute('profile', route);
+    this.pushRoute(section === ProfileSection.Drafts ? 'drafts' : 'profile', route);
+  }
+
+  private resumeLocalDraft(target: DraftTarget): void {
+    if (target.ownerId !== forumSession.user?.id || this.composerRoute !== undefined ||
+      parseDraftTarget(target.key, target.ownerId) === undefined) { return; }
+    const route: ForumRoute = new ForumRoute();
+    route.creatingTopic = target.creatingTopic; route.topicId = target.topicId;
+    route.replyTo = target.replyTo; route.postId = target.postId; route.resumeDraft = true;
+    this.presentComposer(route);
+  }
+
+  private openUser(username: string): void {
+    if (!username.trim() || username.length > 60) { return; }
+    const route: ForumRoute = new ForumRoute(); route.username = username;
+    this.resetNavigation(); this.pushRoute('user', route);
   }
 
   private authenticated(): void {
@@ -412,14 +446,24 @@ struct Index {
   destination(name: string, param: Object) {
     if (name === 'topic') {
       TopicPage({ topicId: (param as ForumRoute).topicId,
+        foreground: forumSession.foreground, readerCovered: this.showComposer || this.showBrowser || this.showAuthPopup,
         postNumber: (param as ForumRoute).postNumber, reloadSignal: (param as ForumRoute).replyRevision,
         topInset: this.topInset, bottomInset: this.bottomInset,
         onBack: (): void => { this.paths.pop(); },
         appearance: this.appearance, treeView: this.appearance.treeView,
+        onQuote: (topicId: number, postNumber: number, quoteText: string): void => {
+          this.compose(topicId, postNumber, 0, param as ForumRoute, quoteText);
+        },
+        onSearchTopic: (topicId: number): void => {
+          const route: ForumRoute = new ForumRoute(); route.topicId = topicId;
+          this.pushRoute('search-topic', route);
+        },
+        onOpenUser: (username: string): void => { this.openUser(username); },
         onCompose: (topicId: number, replyTo: number, postId: number): void => { this.compose(topicId, replyTo, postId, param as ForumRoute); },
         onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); }, onLogin: (): void => { this.openLogin(); } })
     } else if (name === 'composer') {
       ComposerPage({ topInset: this.topInset, bottomInset: this.bottomInset, topicId: (param as ForumRoute).topicId, replyTo: (param as ForumRoute).replyTo,
+        initialQuote: (param as ForumRoute).quoteText,
         postId: (param as ForumRoute).postId, appearance: this.appearance,
         onSubmitted: (number: number): void => {
           const route: ForumRoute = param as ForumRoute;
@@ -434,6 +478,29 @@ struct Index {
           reloadSignal: this.dataVersion + forumSession.revision,
           onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); }, onVerify: (): void => { this.openBrowser(); } })
       }.title((param as ForumRoute).categoryName).padding({ top: this.topInset }).backgroundColor($r('app.color.page_background'))
+    } else if (name === 'tag') {
+      NavDestination() {
+        TopicFeed({ tagName: (param as ForumRoute).tagName, appearance: this.appearance,
+          bottomInset: this.bottomInset, reloadSignal: this.dataVersion + forumSession.revision,
+          onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); },
+          onVerify: (): void => { this.openBrowser(); } })
+      }.title('# ' + (param as ForumRoute).tagName).padding({ top: this.topInset }).backgroundColor($r('app.color.surface'))
+    } else if (name === 'search-topic') {
+      NavDestination() {
+        SearchPage({ topicScopeId: (param as ForumRoute).topicId, appearance: this.appearance,
+          topInset: 0, bottomInset: this.bottomInset,
+          onOpenTopic: (id: number, postNumber: number): void => { this.openTopic(id, postNumber); },
+          onVerify: (): void => { this.openBrowser(); } })
+      }.title('搜索本话题').padding({ top: this.topInset }).backgroundColor($r('app.color.surface'))
+    } else if (name === 'drafts') {
+      DraftsPage({ topInset: this.topInset, bottomInset: this.bottomInset, appearance: this.appearance,
+        reloadSignal: this.draftsRevision, onOpenDraft: (target: DraftTarget): void => { this.resumeLocalDraft(target); },
+        onLogin: (): void => { this.openLogin(); } })
+    } else if (name === 'user') {
+      UserProfilePage({ username: (param as ForumRoute).username, appearance: this.appearance,
+        topInset: this.topInset, bottomInset: this.bottomInset,
+        onOpenTopic: (id: number, postNumber: number): void => { this.openTopic(id, postNumber); },
+        onLogin: (): void => { this.openLogin(); } })
     } else if (name === 'profile') {
       ProfileSectionPage({ topInset: this.topInset, bottomInset: this.bottomInset, section: (param as ForumRoute).section,
         onOpenTopic: (id: number, number: number): void => { this.openTopic(id, number); }, onLogin: (): void => { this.openLogin(); } })
@@ -472,6 +539,8 @@ struct Index {
         HdsTabs({ controller: this.controller, index: this.currentIndex }) {
           TabContent() {
             HomeTopicFeed({ appearance: this.appearance, reloadSignal: this.dataVersion + forumSession.revision,
+              ownerId: forumSession.user?.id ?? 0,
+              barsCollapsed: this.navigationCollapsed,
               refreshTopSignal: this.latestRefreshSignal,
               topInset: this.topInset, bottomInset: this.bottomInset,
               onReadScroll: (offset: number, state: ScrollState, source: ScrollSource, atTop: boolean): void => {
@@ -490,15 +559,23 @@ struct Index {
           TabContent() {
             CategoriesPage({ reloadSignal: this.dataVersion + forumSession.revision,
               topInset: this.topInset, bottomInset: this.bottomInset,
+              appearance: this.appearance,
+              active: this.currentIndex === 1 && this.mainPageVisible && !this.showBrowser && this.paths.size() === 0,
               listScroller: this.categoriesScroller,
               onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
                 this.readNavigationScroll(1, offset, state, source);
               },
-              onOpenCategory: (category: Category): void => { this.openCategory(category); }, onVerify: (): void => { this.openBrowser(); } })
+              onOpenCategory: (category: Category): void => { this.openCategory(category); },
+              onOpenTag: (tagName: string): void => {
+                const route: ForumRoute = new ForumRoute(); route.tagName = tagName;
+                this.resetNavigation(); this.pushRoute('tag', route);
+              }, onVerify: (): void => { this.openBrowser(); } })
           }.height('100%')
-            .tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.square_grid_2x2')) }, '分类'))
+            .tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.square_grid_2x2')) }, '目录'))
           TabContent() {
             SearchPage({ reloadSignal: this.dataVersion + forumSession.revision,
+              active: this.currentIndex === 2 && this.mainPageVisible && !this.showBrowser && this.paths.size() === 0,
+              appearance: this.appearance,
               topInset: this.topInset, bottomInset: this.bottomInset,
               listScroller: this.searchScroller,
               onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
@@ -521,6 +598,7 @@ struct Index {
             .tabBar(new BottomTabBarStyle({ normal: new SymbolGlyphModifier($r('sys.symbol.bell')) }, '消息'))
           TabContent() {
             ProfilePage({ listScroller: this.profileScroller,
+              appearance: this.appearance, onOpenUser: (username: string): void => { this.openUser(username); },
               topInset: this.topInset, bottomInset: this.bottomInset,
               onReadScroll: (offset: number, state: ScrollState, source: ScrollSource): void => {
                 this.readNavigationScroll(4, offset, state, source);
@@ -590,6 +668,8 @@ struct Index {
               this.browserAdapter.request(request, cancellation));
             forumApi.registerBrowserMediaTransport((url: string, cancellation: RequestCancellation) =>
               this.browserAdapter.requestImage(url, cancellation));
+            forumApi.registerBrowserCookTransport((raw: string, cancellation: RequestCancellation): Promise<string> =>
+              this.browserAdapter.cookPreview(raw, cancellation));
             forumApi.registerBrowserRecovery(async (cancellation: RequestCancellation): Promise<boolean> => {
               if (!this.webAttached || this.showBrowser || this.showAuthPopup ||
                 this.paths.getAllPathName().slice(-1)[0] === 'connection-probe') { return false; }

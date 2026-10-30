@@ -7,6 +7,8 @@ import { Category, Post, TopicCreationResult, TopicDetail, UploadedFile, uploade
 import { ForumSession, forumSession } from '../models/ForumSession';
 import { forumApi, RequestCancellation } from '../services/ForumApi';
 import { materialFor } from '../services/MaterialPolicy';
+import { RichPostContent, postContentUrl } from '../components/RichPostContent';
+import { LOCAL_DRAFT_STORE, localDraftAttachments, parseDraftTarget, recordLocalDraftMetadata, draftMetadataKey, DraftTarget } from '../services/DraftRepository';
 
 interface DraftAttachment { id: string; uri: string; name: string; mime: string; size: number; }
 interface NewTopicDraft { version: number; title: string; categoryId: number; tags: string; raw: string; }
@@ -24,7 +26,7 @@ const ALLOWED_EXTENSIONS: string[] = [
   'jpg', 'jpeg', 'png', 'gif', 'heic', 'heif', 'webp', 'avif', 'svg', 'txt', 'pdf', 'doc', 'docx',
   'csv', 'zip', '7z', 'gz', 'xz', 'jxl', 'md'
 ];
-const draftAttachments: Map<string, DraftAttachment[]> = new Map<string, DraftAttachment[]>();
+const draftAttachments: Map<string, DraftAttachment[]> = localDraftAttachments;
 
 function composerError(error: Object): string {
   return error instanceof Error && error.message ? error.message : '暂时无法完成请求，请稍后重试。';
@@ -51,6 +53,7 @@ export struct ComposerPage {
   @Param replyTo: number = 0;
   @Param postId: number = 0;
   @Param creatingTopic: boolean = false;
+  @Param initialQuote: string = '';
   @Param appearance: AppearanceSettings = loadAppearanceSettings();
   @Param session: ForumSession = forumSession;
   @Event onDone: () => void = (): void => {};
@@ -72,6 +75,11 @@ export struct ComposerPage {
   @Local attachments: DraftAttachment[] = [];
   @Local showEmoji: boolean = false;
   @Local saveMessage: string = '';
+  @Local previewing: boolean = false;
+  @Local previewBusy: boolean = false;
+  @Local previewCooked: string = '';
+  @Local previewError: string = '';
+  private previewRequest: RequestCancellation | undefined = undefined;
   private initialized: boolean = false;
   private ownerId: number = 0;
   private draftKey: string = '';
@@ -83,6 +91,7 @@ export struct ComposerPage {
   private submissionSucceeded: boolean = false;
   private discardedDraft: boolean = false;
   private draftLoaded: boolean = false;
+  private initialQuoteApplied: boolean = false;
   private textAreaController: TextAreaController | undefined = undefined;
   private titleController: TextInputController | undefined = undefined;
   private tagsController: TextInputController | undefined = undefined;
@@ -112,6 +121,7 @@ export struct ComposerPage {
   }
 
   private presentationHidden(): void {
+    this.cancelPreview(true);
     this.presentationActive = false;
     if (!this.submitting && !this.submissionSucceeded && !this.discardedDraft) { void this.saveDraft(); }
     if (!this.presentedAsSheet) { return; }
@@ -134,7 +144,9 @@ export struct ComposerPage {
 
   @Monitor('session.revision')
   accountChanged(): void {
+    this.cancelPreview(true);
     if (this.ownerId > 0 && this.session.user?.id !== this.ownerId) {
+      this.initialQuoteApplied = true;
       this.prepareGeneration++;
       this.writeRequest?.cancel();
       this.loading = false;
@@ -153,6 +165,48 @@ export struct ComposerPage {
       this.permitted = false;
       this.error = '登录账号已变化，本次编辑已停止。若刚才已提交，请返回话题核对结果。';
     }
+  }
+
+  @Monitor('session.foreground')
+  previewForegroundChanged(): void { if (!this.session.foreground) { this.cancelPreview(true); } }
+
+  private cancelPreview(returnToEditing: boolean): void {
+    this.previewRequest?.cancel(); this.previewRequest = undefined;
+    this.previewBusy = false; this.previewCooked = ''; this.previewError = '';
+    if (returnToEditing) { this.previewing = false; }
+  }
+
+  private async showPreview(): Promise<void> {
+    if (!this.presentationActive || !this.draftLoaded || this.loading || this.submitting || this.picking ||
+      this.ownerId <= 0 || this.session.user?.id !== this.ownerId || this.session.foreground === false) { return; }
+    this.cancelPreview(false);
+    this.previewing = true; this.showEmoji = false;
+    this.textAreaController?.stopEditing(); this.titleController?.stopEditing(); this.tagsController?.stopEditing();
+    const raw: string = this.draft;
+    if (!raw.trim()) { return; }
+    const owner: number = this.ownerId;
+    const revision: number = this.session.revision;
+    const request: RequestCancellation = new RequestCancellation(); this.previewRequest = request; this.previewBusy = true;
+    try {
+      const cooked: string = await forumApi.previewDraft(raw, request);
+      if (this.previewRequest !== request || request.isCancelled || !this.presentationActive || !this.previewing ||
+        this.session.user?.id !== owner || this.ownerId !== owner || this.session.revision !== revision || this.draft !== raw) { return; }
+      this.previewCooked = cooked;
+    } catch (error) {
+      if (this.previewRequest === request && this.presentationActive && this.previewing && this.session.user?.id === owner &&
+        this.session.revision === revision && !request.isCancelled) { this.previewError = composerError(error); }
+    } finally {
+      if (this.previewRequest === request) { this.previewRequest = undefined; this.previewBusy = false; }
+    }
+  }
+
+  private openPreviewLink(raw: string): void {
+    const url: string = postContentUrl(raw);
+    if (!url.startsWith('https://')) { return; }
+    const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    context.startAbility({ action: 'ohos.want.action.viewData', uri: url }).catch((): void => {
+      try { this.getUIContext().getPromptAction().showToast({ message: '无法打开链接' }); } catch {}
+    });
   }
 
   @Computed
@@ -209,6 +263,16 @@ export struct ComposerPage {
     this.draft = saved.raw;
   }
 
+  private appendInitialQuote(): void {
+    if (this.initialQuoteApplied || !this.draftLoaded || this.creatingTopic || this.topicId <= 0 ||
+      this.ownerId <= 0 || this.session.user?.id !== this.ownerId) { return; }
+    this.initialQuoteApplied = true;
+    const quote: string = this.initialQuote.trim();
+    if (!quote) { return; }
+    this.draft = `${this.draft.trimEnd()}${this.draft.trim() ? '\n\n' : ''}${quote}\n\n`;
+    this.scheduleDraftSave();
+  }
+
   private async prepare(): Promise<void> {
     if (this.initialized || this.loading) { return; }
     this.initialized = true;
@@ -252,7 +316,7 @@ export struct ComposerPage {
       if (alreadyLoaded) { if (this.creatingTopic) { this.validateCategorySelection(); } return; }
       const context: common.UIAbilityContext = this.getUIContext().getHostContext() as common.UIAbilityContext;
       try {
-        const store: preferences.Preferences = await preferences.getPreferences(context, { name: 'forum_composer_drafts_v1' });
+        const store: preferences.Preferences = await preferences.getPreferences(context, { name: LOCAL_DRAFT_STORE });
         if (request !== this.prepareGeneration || this.session.user?.id !== this.ownerId) { return; }
         this.store = store;
         const saved: preferences.ValueType = await store.get(this.draftKey, '');
@@ -269,6 +333,7 @@ export struct ComposerPage {
       if (request !== this.prepareGeneration || this.session.user?.id !== this.ownerId) { return; }
       this.attachments = draftAttachments.get(this.draftKey) || [];
       this.draftLoaded = true;
+      this.appendInitialQuote();
       if (this.creatingTopic) { this.validateCategorySelection(); }
     } catch (error) {
       if (request === this.prepareGeneration) { this.error = composerError(error); this.permitted = false; }
@@ -277,6 +342,7 @@ export struct ComposerPage {
   }
 
   private changeDraft(value: string): void {
+    if (value !== this.draft) { this.cancelPreview(true); }
     this.draft = value;
     this.scheduleDraftSave();
   }
@@ -307,6 +373,7 @@ export struct ComposerPage {
     if (!this.draftLoaded || !this.draftKey || this.store === undefined ||
       this.submissionSucceeded || this.discardedDraft) { return; }
     const key: string = this.draftKey;
+    const owner: number = this.ownerId;
     const topicDraft: NewTopicDraft = { version: 1, title: this.newTopicTitle, categoryId: this.categoryId,
       tags: this.tagsText, raw: this.draft };
     const value: string = this.creatingTopic ? JSON.stringify(topicDraft) : this.draft;
@@ -315,11 +382,16 @@ export struct ComposerPage {
       if (this.creatingTopic && !this.newTopicTitle.trim() && !this.draft.trim() &&
         !this.tagsText.trim() && this.categoryId === 0 && this.attachments.length === 0) {
         await store.delete(key);
+        try { await store.delete(draftMetadataKey(key)); } catch {}
         await store.flush();
         if (key === this.draftKey) { this.saveMessage = ''; }
         return;
       }
       await store.put(key, value);
+      const target: DraftTarget | undefined = parseDraftTarget(key, owner);
+      if (target !== undefined) {
+        try { await recordLocalDraftMetadata(store, target, this.topicTitle, Date.now()); } catch {}
+      }
       await store.flush();
       if (key === this.draftKey) { this.saveMessage = '草稿已保存在本机'; }
     } catch { if (key === this.draftKey) { this.saveMessage = '当前草稿暂时无法保存到本机'; } }
@@ -405,6 +477,7 @@ export struct ComposerPage {
 
   private async submit(): Promise<void> {
     if (!this.canSubmit) { return; }
+    this.cancelPreview(true);
     this.submitting = true;
     this.notifyDismissAvailability();
     this.error = '';
@@ -474,7 +547,11 @@ export struct ComposerPage {
       const completedDraftKey: string = this.draftKey;
       const completedStore: preferences.Preferences | undefined = this.store;
       if (completedStore !== undefined) {
-        try { await completedStore.delete(completedDraftKey); await completedStore.flush(); } catch {}
+        try {
+          await completedStore.delete(completedDraftKey);
+          try { await completedStore.delete(draftMetadataKey(completedDraftKey)); } catch {}
+          await completedStore.flush();
+        } catch {}
       }
       draftAttachments.delete(completedDraftKey);
       // Local cleanup may outlive the originating account or sheet. Keep the
@@ -524,7 +601,11 @@ export struct ComposerPage {
 
   private async discard(): Promise<void> {
     if (this.saveTimer >= 0) { clearTimeout(this.saveTimer); this.saveTimer = -1; }
-    if (this.store !== undefined && this.draftKey) { await this.store.delete(this.draftKey); await this.store.flush(); }
+    if (this.store !== undefined && this.draftKey) {
+      await this.store.delete(this.draftKey);
+      try { await this.store.delete(draftMetadataKey(this.draftKey)); } catch {}
+      await this.store.flush();
+    }
     draftAttachments.delete(this.draftKey);
     this.draft = this.initialRaw;
     this.newTopicTitle = '';
@@ -641,6 +722,54 @@ export struct ComposerPage {
   }
 
   @Builder
+  previewModeTabs() {
+    Row({ space: 4 }) {
+      Button('编辑', { type: ButtonType.Capsule, buttonStyle: ButtonStyleMode.TEXTUAL })
+        .layoutWeight(1).height(40).fontSize(14)
+        .fontColor(!this.previewing ? $r('app.color.accent') : $r('app.color.text_secondary'))
+        .backgroundColor(!this.previewing ? $r('app.color.surface') : Color.Transparent)
+        .accessibilitySelected(!this.previewing).id('composer_edit_tab')
+        .onClick((): void => { this.cancelPreview(true); })
+      Button('预览', { type: ButtonType.Capsule, buttonStyle: ButtonStyleMode.TEXTUAL })
+        .layoutWeight(1).height(40).fontSize(14)
+        .fontColor(this.previewing ? $r('app.color.accent') : $r('app.color.text_secondary'))
+        .backgroundColor(this.previewing ? $r('app.color.surface') : Color.Transparent)
+        .enabled(this.draftLoaded && !this.loading && !this.submitting && !this.picking && !this.previewBusy)
+        .accessibilitySelected(this.previewing).id('composer_preview_tab')
+        .onClick((): void => { void this.showPreview(); })
+    }.width('100%').padding(3).borderRadius(23).backgroundColor($r('app.color.page_background'))
+  }
+
+  @Builder
+  previewContent() {
+    Scroll() {
+      Column({ space: 14 }) {
+        if (this.previewBusy) {
+          Row({ space: 10 }) {
+            LoadingProgress().width(24).height(24)
+            Text('正在生成预览…').fontSize(14).fontColor($r('app.color.text_secondary'))
+          }.width('100%').justifyContent(FlexAlign.Center).padding({ top: 24, bottom: 24 })
+        } else if (this.previewError) {
+          Text(this.previewError).fontSize(14).fontColor($r('app.color.error')).lineHeight(22).width('100%')
+          Button('重试预览', { buttonStyle: ButtonStyleMode.TEXTUAL }).height(44)
+            .fontColor($r('app.color.accent')).onClick((): void => { void this.showPreview(); })
+        } else if (this.previewCooked) {
+          RichPostContent({ cooked: this.previewCooked, session: this.session, reduceMotion: this.appearance.reduceMotion,
+            onOpenLink: (url: string): void => { this.openPreviewLink(url); },
+            onPicture: (url: string): void => { this.openPreviewLink(url); } }).width('100%')
+        } else {
+          Text('还没有可预览的正文').fontSize(14).fontColor($r('app.color.text_secondary')).padding({ top: 24, bottom: 24 })
+        }
+        if (this.attachments.length > 0) {
+          Text(`${this.attachments.length} 个附件尚未上传，预览不包含这些附件。`)
+            .fontSize(12).lineHeight(20).fontColor($r('app.color.text_secondary')).width('100%')
+        }
+      }.width('100%').alignItems(HorizontalAlign.Start).padding(12)
+    }.width('100%').layoutWeight(1).scrollBar(BarState.Auto).backgroundColor($r('app.color.surface'))
+      .borderRadius(12).id('composer_preview_content')
+  }
+
+  @Builder
   editorContent() {
     Column({ space: this.presentedAsSheet ? 8 : 12 }) {
       if (this.creatingTopic) {
@@ -662,7 +791,10 @@ export struct ComposerPage {
       } else {
         Text(this.topicTitle).fontSize(16).fontColor($r('app.color.text_secondary')).maxLines(2).width('100%')
       }
-      if (this.creatingTopic) {
+      this.previewModeTabs()
+      if (this.previewing) {
+        this.previewContent()
+      } else if (this.creatingTopic) {
         Scroll() {
           Column({ space: 8 }) {
             this.editorFeedback()
@@ -689,29 +821,39 @@ export struct ComposerPage {
           .onChange((value: string): void => { this.changeDraft(value); }).id('composer_text_area')
         this.attachmentList()
       }
-      if (this.showEmoji) { this.emojiPalette() }
+      if (!this.previewing && this.showEmoji) { this.emojiPalette() }
       if (this.creatingTopic) { Divider().color($r('app.color.divider')).strokeWidth(0.5) }
-      Row({ space: 4 }) {
-        this.toolButton({ symbol: $r('sys.symbol.picture'), label: '选择图片', id: 'composer_add_image',
-          enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
-          action: (): void => { void this.chooseAttachment(true); } })
-        this.toolButton({ symbol: $r('sys.symbol.paperclip'), label: '选择附件', id: 'composer_add_attachment',
-          enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
-          action: (): void => { void this.chooseAttachment(false); } })
-        this.toolButton({ symbol: $r('sys.symbol.face_smiling'), label: this.showEmoji ? '收起表情' : '插入表情', id: 'composer_show_emoji',
-          enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: this.showEmoji,
-          action: (): void => { this.toggleEmoji(); } })
-        this.toolButton({ symbol: $r('sys.symbol.bold'), label: '插入粗体', id: 'composer_insert_bold',
-          enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
-          action: (): void => { this.insert('**内容**'); } })
-        this.toolButton({ symbol: $r('sys.symbol.link'), label: '插入链接', id: 'composer_insert_link',
-          enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
-          action: (): void => { this.insert('[链接文字](https://)'); } })
-        if (this.creatingTopic) {
-          Text(`${this.draft.length} 字`).fontSize(11).fontColor($r('app.color.text_secondary'))
-            .layoutWeight(1).textAlign(TextAlign.End).maxLines(1)
-        }
-      }.width('100%').height(48).justifyContent(this.creatingTopic ? FlexAlign.Start : FlexAlign.SpaceBetween)
+      if (!this.previewing) {
+      Scroll() {
+        Row({ space: 4 }) {
+          this.toolButton({ symbol: $r('sys.symbol.picture'), label: '选择图片', id: 'composer_add_image',
+            enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
+            action: (): void => { void this.chooseAttachment(true); } })
+          this.toolButton({ symbol: $r('sys.symbol.paperclip'), label: '选择附件', id: 'composer_add_attachment',
+            enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
+            action: (): void => { void this.chooseAttachment(false); } })
+          this.toolButton({ symbol: $r('sys.symbol.face_smiling'), label: this.showEmoji ? '收起表情' : '插入表情', id: 'composer_show_emoji',
+            enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: this.showEmoji,
+            action: (): void => { this.toggleEmoji(); } })
+          this.toolButton({ symbol: $r('sys.symbol.bold'), label: '插入粗体', id: 'composer_insert_bold',
+            enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
+            action: (): void => { this.insert('**内容**'); } })
+          this.toolButton({ symbol: $r('sys.symbol.list_bullet'), label: '插入列表', id: 'composer_insert_list',
+            enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
+            action: (): void => { this.insert('- 列表项\n- 列表项'); } })
+          this.toolButton({ symbol: $r('sys.symbol.doc_text'), label: '插入代码块', id: 'composer_insert_code',
+            enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
+            action: (): void => { this.insert('```\n代码\n```'); } })
+          this.toolButton({ symbol: $r('sys.symbol.link'), label: '插入链接', id: 'composer_insert_link',
+            enabled: this.permitted && !this.loading && !this.submitting && !this.picking, selected: false,
+            action: (): void => { this.insert('[链接文字](https://)'); } })
+          if (this.creatingTopic) {
+            Text(`${this.draft.length} 字`).fontSize(11).fontColor($r('app.color.text_secondary'))
+              .width(72).textAlign(TextAlign.End).maxLines(1)
+          }
+        }.height(48)
+      }.width('100%').height(48).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+      }
       if (!this.creatingTopic) {
         Row() {
         Text(this.submitting ? '正在提交…' : `${this.draft.length} 字${this.saveMessage ? ` · ${this.saveMessage}` : ''}`)

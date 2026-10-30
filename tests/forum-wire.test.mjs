@@ -1197,3 +1197,294 @@ test('new topic late receipts and category permissions cannot cross cancellation
   assert.equal((await categories).error.kind, rt.api.ForumErrorKind.Cancelled);
   assert.deepEqual(api.cachedCategories(), []);
 });
+
+test('my topics and replies use distinct official action filters and stable pagination keys', async () => {
+  for (const [section, filter] of [['Topics', '4'], ['Replies', '5']]) {
+    const rt = runtime();
+    const actions = Array.from({ length: 30 }, (_unused, index) => ({ post_id: index + 40,
+      topic_id: index + 400, post_number: section === 'Topics' ? 1 : 7,
+      title: 'Fixture &amp; title', excerpt: '<p>Content</p>', action_type: Number(filter), created_at: '2026-10-28T01:00:00Z' }));
+    const { api, requests } = browserApi(rt, async () => json({ user_actions: actions }));
+    const page = await api.fetchProfile('fixture user', rt.models.ProfileSection[section], 2);
+    const query = new URL('https://linux.do' + requests[0].path).searchParams;
+    assert.equal(query.get('filter'), filter);
+    assert.equal(query.get('username'), 'fixture user');
+    assert.equal(query.get('offset'), '60');
+    assert.equal(query.get('limit'), '30');
+    assert.equal(page.hasMore, true); assert.equal(page.nextCursor, 3);
+    assert.equal(page.entries[0].topicId, 400);
+    assert.equal(page.entries[0].postNumber, section === 'Topics' ? 1 : 7);
+    const refreshed = await api.fetchProfile('fixture user', rt.models.ProfileSection[section]);
+    assert.equal(refreshed.entries[0].id, page.entries[0].id);
+    assert.match(page.entries[0].subtitle, section === 'Topics' ? /发表话题/ : /回复/);
+  }
+});
+
+test('server read history keeps service ordering, continuation and real read-floor navigation', async () => {
+  const rt = runtime();
+  const { api, requests } = browserApi(rt, async () => json({ topic_list: {
+    topics: [{ id: 42, title: 'Read second', posts_count: 20, last_read_post_number: 12 },
+      { id: 7, title: 'Read first', posts_count: 3 }], more_topics_url: '/read.json?page=3'
+  }, users: [] }));
+  const result = await api.fetchProfile('fixture', rt.models.ProfileSection.Read, 2);
+  assert.equal(requests[0].path, '/read.json?page=2');
+  assert.deepEqual(result.entries.map(entry => entry.topicId), [42, 7]);
+  assert.deepEqual(result.entries.map(entry => entry.postNumber), [12, 1]);
+  assert.equal(result.hasMore, true); assert.equal(result.nextCursor, 3);
+});
+
+test('bookmarks support post and topic serializers with bounded resume floors and opaque continuation URLs', async () => {
+  const rt = runtime();
+  const { api, requests } = browserApi(rt, async () => json({ user_bookmark_list: {
+    bookmarks: [{ id: 1, topic_id: 42, bookmarkable_type: 'Post', linked_post_number: 7,
+      title: 'A &amp; B', excerpt: '<p>Saved post</p>', name: 'remember', highest_post_number: 20,
+      user: { username: 'fixture', avatar_template: '/avatar/{size}.png' } },
+    { id: 2, topic_id: 43, bookmarkable_type: 'Topic', linked_post_number: 1,
+      last_read_post_number: 12, highest_post_number: 12, title: 'Saved topic' }],
+    more_bookmarks_url: 'https://untrusted.example/never-follow'
+  } }));
+  const result = await api.fetchProfile('fixture user', rt.models.ProfileSection.Bookmarks, 1);
+  assert.equal(requests[0].path, '/u/fixture%20user/bookmarks.json?page=1');
+  assert.equal(result.entries[0].id, 'bookmark:1'); assert.equal(result.entries[0].postNumber, 7);
+  assert.equal(result.entries[0].title, 'A & B'); assert.match(result.entries[0].subtitle, /remember.*Saved post/);
+  assert.equal(result.entries[1].postNumber, 12, 'A completely read topic never links beyond its highest floor.');
+  assert.equal(result.hasMore, true); assert.equal(result.nextCursor, 2);
+  assert.equal(requests.length, 1, 'The server URL is a continuation flag, never a credential-bearing redirect.');
+});
+
+test('empty bookmark receipts differ from malformed data and unavailable bookmarks remain visible with a reason', async () => {
+  const rt = runtime();
+  let response = { bookmarks: [] };
+  const { api } = browserApi(rt, async () => json(response));
+  const empty = await api.fetchProfile('fixture', rt.models.ProfileSection.Bookmarks);
+  assert.deepEqual(empty.entries, []); assert.equal(empty.hasMore, false);
+  response = { success: true };
+  await assert.rejects(() => api.fetchProfile('fixture', rt.models.ProfileSection.Bookmarks),
+    error => error.kind === rt.api.ForumErrorKind.InvalidResponse);
+  response = { user_bookmark_list: { bookmarks: [{ id: 8, topic_id: 42, title: 'Removed', deleted: true },
+    { id: 9, bookmarkable_type: 'Chat::Message', title: 'Chat saved' }] } };
+  const unavailable = await api.fetchProfile('fixture', rt.models.ProfileSection.Bookmarks);
+  assert.equal(unavailable.entries.length, 2); assert.ok(unavailable.entries.every(entry => entry.topicId === 0));
+  assert.match(unavailable.entries[0].subtitle, /原内容暂不可用/);
+  assert.match(unavailable.entries[1].subtitle, /社区网页查看/);
+});
+
+test('personal statistics preserve missing metrics and reject a missing summary receipt', async () => {
+  const rt = runtime();
+  let response = { user_summary: { topic_count: 0, post_count: 4, likes_received: 8 } };
+  const { api } = browserApi(rt, async () => json(response));
+  const summary = await api.fetchProfile('fixture', rt.models.ProfileSection.Summary);
+  assert.equal(summary.fields.find(field => field.label === '发表话题').value, '0');
+  assert.equal(summary.fields.find(field => field.label === '回复数量').value, '4');
+  assert.equal(summary.fields.find(field => field.label === '收到赞').value, '8');
+  assert.equal(summary.fields.find(field => field.label === '访问天数').value, '—');
+  response = { success: true };
+  await assert.rejects(() => api.fetchProfile('fixture', rt.models.ProfileSection.Summary),
+    error => error.kind === rt.api.ForumErrorKind.InvalidResponse);
+});
+
+test('post bookmarks use the official bookmarkable payload, confirmed bookmark ID and one CSRF-protected write', async () => {
+  const rt = runtime();
+  const { api, requests } = browserApi(rt, async request => {
+    if (request.method === 'GET') { return json({ csrf: 'fixture-only-csrf' }); }
+    return request.method === 'POST' ? json({ success: 'OK', id: 81 }) : json({ success: 'OK' });
+  });
+  assert.equal(await api.createPostBookmark(71), 81);
+  await api.deleteBookmark(81);
+  const writes = requests.filter(request => request.method !== 'GET');
+  assert.deepEqual(writes.map(request => [request.path, request.method]),
+    [['/bookmarks.json', 'POST'], ['/bookmarks/81.json', 'DELETE']]);
+  assert.deepEqual(JSON.parse(writes[0].body), { bookmarkable_id: 71, bookmarkable_type: 'Post' });
+  assert.equal(writes[1].body, '');
+  assert.ok(writes.every(request => request.csrf === 'fixture-only-csrf'));
+  assert.equal(rt.nativeCalls.length, 0);
+});
+
+test('bookmark receipt errors cannot invent success or repeat a state-changing request', async () => {
+  for (const [response, expected] of [
+    [json({ success: false, errors: ['fixture bookmark refused'] }), 'rejected'],
+    [json({ success: 'OK' }), 'unknown_result'],
+    [json({ success: 'OK', id: -1 }), 'unknown_result'],
+    [json({ success: 'OK', id: 1.2 }), 'unknown_result'],
+    [json({ id: 81 }), 'unknown_result'],
+    [{ status: 200, body: 'not JSON', headers: {} }, 'unknown_result'],
+    [json({ errors: ['fixture forbidden'] }, 403), 'forbidden'],
+    [json({ errors: ['fixture throttled'] }, 429), 'rate_limited'],
+    [json({ errors: ['fixture upstream failure'] }, 502), 'unknown_result']
+  ]) {
+    const rt = runtime();
+    const { api, requests } = browserApi(rt, async request => request.method === 'GET' ?
+      json({ csrf: 'fixture-only-csrf' }) : response);
+    await assert.rejects(() => api.createPostBookmark(71), error => error.kind === expected);
+    assert.equal(requests.filter(request => request.method === 'POST').length, 1);
+  }
+  for (const response of [json({}), { status: 200, body: 'unknown', headers: {} }]) {
+    const rt = runtime();
+    const { api, requests } = browserApi(rt, async request => request.method === 'GET' ?
+      json({ csrf: 'fixture-only-csrf' }) : response);
+    await assert.rejects(() => api.deleteBookmark(81), error => error.kind === 'unknown_result');
+    assert.equal(requests.filter(request => request.method === 'DELETE').length, 1);
+  }
+});
+
+test('invalid bookmark IDs and account changes during CSRF fetch cannot issue a write', async () => {
+  const rt = runtime();
+  const { api, requests } = browserApi(rt, async () => json({ csrf: 'fixture-only-csrf' }));
+  for (const id of [0, -1, 1.2, NaN, Infinity]) {
+    await assert.rejects(() => api.createPostBookmark(id), error => error.kind === 'rejected');
+    await assert.rejects(() => api.deleteBookmark(id), error => error.kind === 'rejected');
+  }
+  assert.equal(requests.length, 0);
+  let release;
+  const pending = browserApi(rt, () => new Promise(resolve => { release = resolve; }));
+  const operation = pending.api.createPostBookmark(71).then(value => ({ value }), error => ({ error }));
+  await Promise.resolve();
+  pending.api.resetSessionContext();
+  release(json({ csrf: 'old-account-fixture' }));
+  assert.equal((await operation).error.kind, 'cancelled');
+  assert.equal(pending.requests.filter(request => request.method === 'POST').length, 0);
+});
+
+test('post bookmark mapping keeps known state, rejects unsafe IDs and preserves unknown metadata for partial receipts', () => {
+  const rt = runtime();
+  const base = { id: 71, topic_id: 42, post_number: 3 };
+  assert.equal(rt.wire.postFromWire({ ...base, bookmarked: true, bookmark_id: 81 }).bookmarkId, 81);
+  assert.equal(rt.wire.postFromWire({ ...base, bookmarked: false, bookmark_id: 81 }).bookmarkId, undefined);
+  assert.equal(rt.wire.postFromWire(base).bookmarked, undefined);
+  for (const bookmark_id of [0, -1, 1.2, NaN, Infinity, '81']) {
+    assert.equal(rt.wire.postFromWire({ ...base, bookmarked: true, bookmark_id }).bookmarkId, undefined);
+  }
+});
+
+test('revision reads use the latest endpoint and opaque server navigation numbers without writes or raw-content fallback', async () => {
+  const rt = runtime();
+  const { api, requests } = browserApi(rt, async request => json({
+    post_id: 71, current_revision: request.path.endsWith('/2.json') ? 2 : 9,
+    first_revision: 2, previous_revision: request.path.endsWith('/2.json') ? null : 2,
+    next_revision: request.path.endsWith('/2.json') ? 9 : null, last_revision: 9,
+    current_version: request.path.endsWith('/2.json') ? 2 : 3, version_count: 3,
+    username: 'fixture-editor', created_at: '2026-10-28T12:00:00Z',
+    body_changes: { inline: '<p>Original<ins>New</ins></p>' }
+  }));
+  const latest = await api.fetchPostRevision(71);
+  assert.equal(latest.currentRevision, 9); assert.equal(latest.previousRevision, 2);
+  const older = await api.fetchPostRevision(71, latest.previousRevision);
+  assert.equal(older.currentRevision, 2); assert.equal(older.nextRevision, 9);
+  await api.fetchPostRevision(71, older.nextRevision);
+  assert.deepEqual(requests.map(request => request.path), [
+    '/posts/71/revisions/latest.json', '/posts/71/revisions/2.json', '/posts/71/revisions/9.json'
+  ]);
+  assert.ok(requests.every(request => request.method === 'GET'));
+  assert.equal(rt.nativeCalls.length, 0);
+});
+
+test('invalid or unauthorized revision reads never enumerate versions, expose another post or fabricate an empty history', async () => {
+  const rt = runtime();
+  let response = json({ post_id: 72, current_revision: 3, first_revision: 2, last_revision: 3, current_version: 3, version_count: 3 });
+  const { api, requests } = browserApi(rt, async () => response);
+  for (const number of [-1, 1, 1.5, NaN, Infinity]) {
+    await assert.rejects(() => api.fetchPostRevision(71, number), error => error.kind === 'rejected');
+  }
+  assert.equal(requests.length, 0);
+  await assert.rejects(() => api.fetchPostRevision(71), error => error.kind === 'invalid_response');
+  assert.equal(requests.length, 1);
+  for (const [status, kind] of [[403, 'forbidden'], [404, 'not_found'], [429, 'rate_limited']]) {
+    response = json({ errors: ['Fixture unavailable revision'] }, status);
+    const before = requests.length;
+    await assert.rejects(() => api.fetchPostRevision(71, 3), error => error.kind === kind);
+    assert.equal(requests.length, before + 1, 'A rejected revision cannot trigger enumeration or a raw-content fallback.');
+  }
+});
+
+test('post edit-history permission is explicit and public version remains distinct from server revision pointers', () => {
+  const rt = runtime();
+  const base = { id: 71, topic_id: 42, post_number: 3 };
+  const policy = rt.load('models/PostRevisionModels');
+  assert.equal(policy.canReadPostHistory(rt.wire.postFromWire({ ...base, can_view_edit_history: true, version: 3 })), true);
+  for (const value of [{}, { can_view_edit_history: true }, { version: 3 }, { can_view_edit_history: false, version: 3 },
+    { can_view_edit_history: 'true', version: 3 }, { can_view_edit_history: true, version: 1 },
+    { can_view_edit_history: true, version: 2.5 }]) {
+    assert.equal(policy.canReadPostHistory(rt.wire.postFromWire({ ...base, ...value })), false);
+  }
+});
+
+test('post author display names preserve the server nickname independently of the stable username', () => {
+  const rt = runtime();
+  const base = { id: 71, topic_id: 42, post_number: 2, username: 'luokakale' };
+  const named = rt.wire.postFromWire({ ...base, name: '洛卡卡了', display_username: 'Other fallback' });
+  assert.equal(named.username, 'luokakale'); assert.equal(named.displayName, '洛卡卡了');
+  assert.equal(rt.wire.postFromWire({ ...base, display_username: '洛卡卡了' }).displayName, '洛卡卡了');
+  assert.equal(rt.wire.postFromWire({ ...base, name: ' ', display_username: '洛卡卡了' }).displayName, '洛卡卡了');
+  assert.equal(rt.wire.postFromWire(base).displayName, undefined, 'Missing nickname metadata stays unknown.');
+  assert.equal(rt.wire.postFromWire({ ...base, name: '' }).displayName, '', 'An explicit blank nickname is not the previous cached name.');
+});
+
+test('reading timing writes use official millisecond fields, CSRF and empty successful receipts exactly once', async () => {
+  const rt = runtime();
+  const { api, requests } = browserApi(rt, async request => request.path === '/session/csrf.json' ?
+    json({ csrf: 'fixture-csrf' }) : { status: 204, body: '', headers: {} });
+  const cancellation = new rt.api.RequestCancellation();
+  await api.recordTopicReadTimings({ ownerId: 8, sessionGeneration: api.getSessionGeneration(), topicId: 42,
+    topicTimeMs: 15000, postTimings: [{ postNumber: 1, milliseconds: 15000 }, { postNumber: 9, milliseconds: 2000 }] }, cancellation);
+  assert.equal(requests.length, 2); assert.equal(requests[1].path, '/topics/timings'); assert.equal(requests[1].method, 'POST');
+  assert.equal(requests[1].csrf, 'fixture-csrf');
+  assert.deepEqual(JSON.parse(requests[1].body), { topic_id: 42, topic_time: 15000, timings: { '1': 15000, '9': 2000 } });
+  assert.equal(api.readTimingRequests.size, 0);
+});
+
+test('reading timing rejects invented floors, excessive durations and duplicate floors before any request', async () => {
+  const rt = runtime(); const { api, requests } = browserApi(rt, async () => assert.fail('No request is permitted.'));
+  const valid = { ownerId: 8, sessionGeneration: api.getSessionGeneration(), topicId: 42,
+    topicTimeMs: 15000, postTimings: [{ postNumber: 1, milliseconds: 1000 }] };
+  for (const invalid of [{ ownerId: 0 }, { topicId: 0 }, { topicTimeMs: 60001 }, { topicTimeMs: -1 },
+    { postTimings: [] }, { postTimings: [{ postNumber: 0, milliseconds: 1000 }] },
+    { postTimings: [{ postNumber: 1, milliseconds: 16000 }] },
+    { postTimings: [{ postNumber: 1, milliseconds: 1000.5 }] },
+    { postTimings: [{ postNumber: 1, milliseconds: 1000 }, { postNumber: 1, milliseconds: 1000 }] }]) {
+    await assert.rejects(() => api.recordTopicReadTimings({ ...valid, ...invalid }, new rt.api.RequestCancellation()),
+      error => error.kind === rt.api.ForumErrorKind.Rejected);
+  }
+  assert.equal(requests.length, 0);
+});
+
+test('reading timing never dispatches after cancellation, backgrounding or account generation changes during CSRF', async () => {
+  for (const action of ['cancel', 'background', 'account']) {
+    const rt = runtime(); const cancellation = new rt.api.RequestCancellation();
+    const { api, requests } = browserApi(rt, async request => {
+      assert.equal(request.path, '/session/csrf.json');
+      if (action === 'cancel') { cancellation.cancel(); }
+      if (action === 'background') { api.setForeground(false); }
+      if (action === 'account') { api.resetSessionContext(); }
+      return json({ csrf: 'fixture-csrf' });
+    });
+    await assert.rejects(() => api.recordTopicReadTimings({ ownerId: 8, sessionGeneration: api.getSessionGeneration(), topicId: 42,
+      topicTimeMs: 1000, postTimings: [{ postNumber: 1, milliseconds: 1000 }] }, cancellation),
+    error => error.kind === rt.api.ForumErrorKind.Cancelled);
+    assert.equal(requests.length, 1); assert.equal(api.readTimingRequests.size, 0);
+  }
+});
+
+test('reading timing queued behind pacing is cancelled before dispatch when foreground ends', async () => {
+  const rt = runtime(); const { api, requests } = browserApi(rt, async request => {
+    assert.equal(request.path, '/session/csrf.json'); return json({ csrf: 'fixture-csrf' });
+  });
+  let slots = 0;
+  api.waitForSlot = async () => { if (++slots === 2) { api.setForeground(false); } };
+  const cancellation = new rt.api.RequestCancellation();
+  await assert.rejects(() => api.recordTopicReadTimings({ ownerId: 8, sessionGeneration: api.getSessionGeneration(), topicId: 42,
+    topicTimeMs: 1000, postTimings: [{ postNumber: 1, milliseconds: 1000 }] }, cancellation),
+  error => error.kind === rt.api.ForumErrorKind.Cancelled);
+  assert.equal(cancellation.isCancelled, true); assert.equal(requests.length, 1);
+});
+
+test('reading timing failed or unknown writes are not recovered or replayed', async () => {
+  for (const status of [403, 429, 503]) {
+    const rt = runtime(); const { api, requests } = browserApi(rt, async request => request.path === '/session/csrf.json' ?
+      json({ csrf: 'fixture-csrf' }) : json({ errors: ['fixture unavailable'] }, status));
+    let recoveries = 0; api.registerBrowserRecovery(async () => { recoveries++; return true; });
+    await assert.rejects(() => api.recordTopicReadTimings({ ownerId: 8, sessionGeneration: api.getSessionGeneration(), topicId: 42,
+      topicTimeMs: 1000, postTimings: [{ postNumber: 1, milliseconds: 1000 }] }, new rt.api.RequestCancellation()));
+    assert.equal(requests.filter(request => request.method === 'POST').length, 1);
+    assert.equal(recoveries, 0); assert.equal(api.readTimingRequests.size, 0);
+  }
+});

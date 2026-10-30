@@ -9,6 +9,13 @@ from pathlib import Path
 probe = Path(__file__).resolve().parent
 project = probe.parent.parent
 output = project / 'artifacts/ech-native-20261018/prototype-app'
+if '--output' in sys.argv:
+    position = sys.argv.index('--output')
+    if position + 1 >= len(sys.argv) or sys.argv[position + 1].startswith('--'):
+        raise SystemExit('--output requires a new directory below this project\'s artifacts/')
+    output = Path(sys.argv[position + 1]).expanduser().resolve()
+    if not output.is_relative_to((project / 'artifacts').resolve()) or output.exists():
+        raise SystemExit('--output must be a new directory below this project\'s artifacts/')
 rust_lib = project / 'artifacts/ech-native-20261018/cargo-target/aarch64-unknown-linux-ohos/release/libech_probe_core.a'
 if not rust_lib.is_file():
     raise SystemExit('Run build-ohos.sh --lib first')

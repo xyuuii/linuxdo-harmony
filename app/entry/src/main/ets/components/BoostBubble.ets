@@ -42,22 +42,23 @@ export struct BoostBubble {
       if (this.boost.user?.avatarUrl) {
         NativeForumImage({ url: this.boost.user.avatarUrl, fit: ImageFit.Cover,
           ownerId: forumSession.user?.id || 0, accessibleLabel: `${this.username} 的头像` })
-          .width(24).height(24).borderRadius(12).clip(true).flexShrink(0)
+          .width(20).height(20).borderRadius(10).clip(true).flexShrink(0)
       } else {
         Text(this.username.slice(0, 1).toUpperCase()).fontSize(12)
           .fontColor($r('app.color.text_secondary')).textAlign(TextAlign.Center)
-          .width(24).height(24).backgroundColor($r('app.color.divider')).borderRadius(12).flexShrink(0)
+          .width(20).height(20).backgroundColor($r('app.color.divider')).borderRadius(10).flexShrink(0)
       }
       RichPostContent({ cooked: this.boost.cooked, compact: true, inlineContent: true,
         reduceMotion: this.reduceMotion, onOpenLink: this.onOpenLink, onPicture: this.onPicture })
         .flexShrink(1)
-    }.width('auto').constraintSize({ maxWidth: '100%', minHeight: 32 })
-      .padding({ left: 4, right: 8, top: 4, bottom: 4 }).borderRadius(20)
-      .backgroundColor(this.showManage ? $r('app.color.selected_background') : $r('app.color.boost_background'))
+    }.width('auto').constraintSize({ maxWidth: '100%', minHeight: 24 })
+      .padding({ left: 2, right: 7, top: 2, bottom: 2 }).borderRadius(14)
+      .backgroundColor($r('app.color.boost_background'))
       .id(`boost_${this.boost.id}`).accessibilityGroup(true).accessibilityText(this.accessibleLabel)
       .onClick((): void => {
         if (this.boost.canDelete && !this.busy) { this.showManage = true; }
       })
       .bindMenu(this.showManage, this.manageMenu, { onDisappear: (): void => { this.showManage = false; } })
+      .bindContextMenu(this.manageMenu, ResponseType.LongPress)
   }
 }

@@ -14,6 +14,7 @@ export interface TopicWire {
   like_count?: number; category_id?: number; created_at?: string; last_posted_at?: string; bumped_at?: string;
   pinned?: boolean; closed?: boolean; unseen?: boolean; excerpt?: string; image_url?: string;
   tags?: Array<string | TagWire>; last_poster_username?: string; posters?: PosterWire[];
+  last_read_post_number?: number; highest_post_number?: number;
 }
 export interface TopicListWire { topics?: TopicWire[]; more_topics_url?: string; }
 export interface TopicListResponseWire { topic_list?: TopicListWire; users?: UserWire[]; }
@@ -27,14 +28,19 @@ export interface CategoryResponseWire { category_list?: CategoryListWire; }
 export interface ReactionWire { id?: string; count?: number; can_undo?: boolean; }
 export interface BoostWire { id?: number; cooked?: string; user?: UserWire; can_delete?: boolean; }
 export interface PostWire {
+  version?: number; can_view_edit_history?: boolean;
+  actions_summary?: PostActionSummaryWire[];
+  bookmarked?: boolean; bookmark_id?: number;
+  name?: string; display_username?: string;
   id?: number; username?: string; avatar_template?: string; animated_avatar?: string; post_number?: number; created_at?: string;
   cooked?: string; topic_id?: number; blurb?: string; reply_to_post_number?: number; reply_count?: number;
   boosts?: BoostWire[]; reactions?: ReactionWire[]; current_user_reaction?: ReactionWire; yours?: boolean;
   can_boost?: boolean; can_accept_answer?: boolean; can_unaccept_answer?: boolean; accepted_answer?: boolean;
   can_edit?: boolean; can_delete?: boolean; raw?: string;
 }
+export interface PostActionSummaryWire { id?: number; can_act?: boolean; acted?: boolean; }
 export interface PostStreamWire { posts?: PostWire[]; stream?: number[]; }
-export interface TopicDetailsWire { can_create_post?: boolean; }
+export interface TopicDetailsWire { can_create_post?: boolean; notification_level?: number; }
 export interface TopicDetailWire {
   id?: number; title?: string; category_id?: number; post_stream?: PostStreamWire; valid_reactions?: string[];
   tags?: Array<string | TagWire>; posts_count?: number; reply_count?: number; highest_post_number?: number;
@@ -43,6 +49,18 @@ export interface TopicDetailWire {
 export interface PostStreamResponseWire { post_stream?: PostStreamWire; replies?: PostWire[]; posts?: PostWire[]; }
 export interface SearchGroupWire { more_full_page_results?: boolean; }
 export interface SearchResponseWire { topics?: TopicWire[]; posts?: PostWire[]; grouped_search_result?: SearchGroupWire; }
+export interface ProfileSolvedPostWire {
+  post_id?: number; post_number?: number; topic_id?: number; topic_title?: string; username?: string;
+  avatar_template?: string; created_at?: string; excerpt?: string; cooked?: string; raw?: string;
+}
+export interface ProfileSolvedResponseWire { user_solved_posts?: ProfileSolvedPostWire[]; }
+export interface ProfileBoostPostWire {
+  id?: number; url?: string; topic_id?: number; topic_title?: string; username?: string; avatar_template?: string;
+}
+export interface ProfileBoostEntryWire {
+  id?: number; post_id?: number; raw?: string; cooked?: string; created_at?: string; user?: UserWire; post?: ProfileBoostPostWire;
+}
+export interface ProfileBoostsResponseWire { boosts?: ProfileBoostEntryWire[]; }
 export interface NotificationDataWire {
   display_username?: string; fancy_title?: string; topic_title?: string; badge_name?: string; message?: string;
   topic_id?: number; original_post_number?: number; post_number?: number; count?: number;
@@ -74,6 +92,13 @@ export interface EmailsWire { email?: string; secondary_emails?: string[]; }
 export interface ActionWire { post_id?: number; topic_id?: number; post_number?: number; title?: string;
   excerpt?: string; action_type?: number; created_at?: string; }
 export interface ActionsResponseWire { user_actions?: ActionWire[]; }
+export interface BookmarkWire {
+  id?: number; topic_id?: number; linked_post_number?: number; last_read_post_number?: number; highest_post_number?: number;
+  title?: string; fancy_title?: string; excerpt?: string; name?: string; created_at?: string; bookmarkable_type?: string;
+  deleted?: boolean; hidden?: boolean; user?: UserWire;
+}
+export interface BookmarkListWire { bookmarks?: BookmarkWire[]; more_bookmarks_url?: string; }
+export interface BookmarksResponseWire { user_bookmark_list?: BookmarkListWire; bookmarks?: BookmarkWire[]; }
 export interface EmojiWire { name?: string; id?: string; url?: string; }
 
 export function decodeObject<T extends object>(body: string): T {
@@ -137,7 +162,9 @@ export function topicFromWire(value: TopicWire): Topic {
     likeCount: numberValue(value.like_count), categoryId: numberValue(value.category_id), createdAt: text(value.created_at),
     lastPostedAt: text(value.last_posted_at), bumpedAt: text(value.bumped_at), pinned: bool(value.pinned),
     closed: bool(value.closed), unseen: bool(value.unseen), excerpt: plainText(text(value.excerpt)),
-    imageUrl: text(value.image_url), tags: tags, lastPosterUsername: text(value.last_poster_username), posters: posters };
+    imageUrl: text(value.image_url), tags: tags, lastPosterUsername: text(value.last_poster_username), posters: posters,
+    lastReadPostNumber: typeof value.last_read_post_number === 'number' ? value.last_read_post_number : undefined,
+    highestPostNumber: typeof value.highest_post_number === 'number' ? value.highest_post_number : undefined };
 }
 export function categoryFromWire(value: CategoryWire, depth: number = 0): Category {
   if (depth > 12 || typeof value.name !== 'string') { throw new Error('Invalid category tree'); }
@@ -158,7 +185,15 @@ export function boostFromWire(value: BoostWire): Boost {
 }
 export function postFromWire(value: PostWire): Post {
   const template: string = text(value.avatar_template);
+  const displayName: string | undefined = typeof value.name === 'string' || typeof value.display_username === 'string' ?
+    text(value.name).trim() || text(value.display_username).trim() : undefined;
   return { id: requireId(value.id), username: text(value.username), avatarTemplate: template,
+    displayName: displayName,
+    version: Number.isSafeInteger(value.version) && (value.version ?? 0) > 0 ? value.version : undefined,
+    canViewEditHistory: typeof value.can_view_edit_history === 'boolean' ? value.can_view_edit_history : undefined,
+    bookmarked: typeof value.bookmarked === 'boolean' ? value.bookmarked : undefined,
+    bookmarkId: value.bookmarked !== false && Number.isSafeInteger(value.bookmark_id) &&
+      (value.bookmark_id ?? 0) > 0 ? value.bookmark_id : undefined,
     avatarUrl: avatarUrlOf(template, 144, text(value.animated_avatar)), postNumber: numberValue(value.post_number), createdAt: text(value.created_at),
     cooked: text(value.cooked), topicId: numberValue(value.topic_id), blurb: plainText(text(value.blurb)),
     replyToPostNumber: numberValue(value.reply_to_post_number), replyCount: numberValue(value.reply_count),
@@ -167,7 +202,10 @@ export function postFromWire(value: PostWire): Post {
     currentUserReaction: value.current_user_reaction ? reactionFromWire(value.current_user_reaction) : undefined,
     yours: bool(value.yours), canBoost: bool(value.can_boost), canAcceptAnswer: bool(value.can_accept_answer),
     canUnacceptAnswer: bool(value.can_unaccept_answer), acceptedAnswer: bool(value.accepted_answer),
-    canEdit: bool(value.can_edit), canDelete: bool(value.can_delete), raw: text(value.raw) };
+    canEdit: bool(value.can_edit), canDelete: bool(value.can_delete), raw: text(value.raw),
+    flagTypes: list(value.actions_summary).filter((action: PostActionSummaryWire): boolean =>
+      action.can_act === true && [3, 4, 7, 8].indexOf(action.id ?? 0) >= 0)
+      .map((action: PostActionSummaryWire): number => action.id ?? 0) };
 }
 export function streamFromWire(value: PostStreamWire): PostStream {
   const stream: number[] = list(value.stream).filter((id: number): boolean => Number.isSafeInteger(id) && id > 0);
@@ -194,7 +232,10 @@ export function detailFromWire(value: TopicDetailWire): TopicDetail {
     highestPostNumber: highestPostNumber,
     postStream: stream, validReactions: list(value.valid_reactions)
       .filter((reaction: string): boolean => typeof reaction === 'string'),
-    closed: closed, archived: archived, details: { canCreatePost: canCreatePost },
+    closed: closed, archived: archived, details: { canCreatePost: canCreatePost,
+      notificationLevel: typeof value.details?.notification_level === 'number' &&
+        Number.isInteger(value.details.notification_level) && value.details.notification_level >= 0 &&
+        value.details.notification_level <= 3 ? value.details.notification_level : undefined },
     canReply: canCreatePost && !closed && !archived };
 }
 const NOTIFICATION_LABELS: Record<string, string> = {

@@ -47,6 +47,7 @@ function startupRuntime(getWindow) {
     '@kit.ArkUI': { window: {} },
     '@kit.BasicServicesKit': {},
     '../services/HandednessState': { handednessState: { start() {}, stop() {} } },
+    '../models/ForumSession': { forumSession: { foreground: false } },
     '../services/ForumApi': { forumApi: { setForeground() {} } }
   };
   const module = { exports: {} };

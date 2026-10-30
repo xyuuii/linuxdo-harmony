@@ -39,6 +39,7 @@ const plainComposer = (extract(source('pages/ComposerPage'), 'interface DraftAtt
   .replace(/^\s*@Computed\s*\n/gm, '\n').replace(/^\s*@Monitor\([\s\S]*?\)\s*\n/gm, '\n')
   .replace(/@(Param|Event|Local) /g, '');
 const cancellation = load(extract(source('services/ForumApi'), 'export enum ForumErrorKind', 'export interface BrowserRequest'));
+const draftRepository = load(source('services/DraftRepository').replace(/^import .*;\n/gm, ''));
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 function runtime({ delayedGet = false, creatingTopic = false, savedDraft } = {}) {
@@ -94,7 +95,7 @@ function runtime({ delayedGet = false, creatingTopic = false, savedDraft } = {})
       fetchPosts: forbidden, fetchPostRaw: forbidden, updatePost: forbidden, uploadFile: forbidden
   };
   const { ComposerPage } = load(plainComposer, {
-    forumSession: session, loadAppearanceSettings: () => ({}), ...cancellation,
+    forumSession: session, loadAppearanceSettings: () => ({}), ...cancellation, ...draftRepository, localDraftAttachments: new Map(),
     forumApi: api,
     preferences: { async getPreferences() { return store; } },
     fileIo: { open: forbidden }, picker: { DocumentViewPicker: forbidden },
@@ -149,7 +150,7 @@ test('loaded drafts survive permission rechecks and keep-close saves their curre
   await settle();
   assert.equal(state.done.length, 1);
   assert.equal(state.saved.get(state.key), 'current edited draft');
-  assert.ok(state.puts.every(item => item.value === 'current edited draft'));
+  assert.ok(state.puts.filter(item => item.key === state.key).every(item => item.value === 'current edited draft'));
   assert.equal(state.page.draftLoaded, false);
   assert.equal(state.timers.size, 0);
 });
@@ -472,4 +473,40 @@ test('empty new-topic metadata is not restored as a draft and late changes canno
   state.page.submissionSucceeded = true;
   await state.page.saveDraft();
   assert.equal(state.saved.has(state.key), false);
+});
+
+test('a requested quote appends after the existing account draft exactly once and survives permission retries', async () => {
+  const state = runtime();
+  state.page.initialQuote = '[quote="fixture, post:3, topic:100"]\nOriginal words\n[/quote]';
+  state.page.presentationShown(); await settle();
+  assert.equal(state.page.draft, 'previously saved draft\n\n' + state.page.initialQuote + '\n\n');
+  state.page.initialized = false; await state.page.prepare();
+  assert.equal(state.page.draft.match(/Original words/g).length, 1);
+  await state.page.saveDraft();
+  assert.equal(state.saved.get(state.key), state.page.draft);
+  const metadata = JSON.parse(state.saved.get(draftRepository.draftMetadataKey(state.key)));
+  assert.equal(metadata.topicTitle, 'fixture topic'); assert.ok(metadata.updatedAt > 0);
+});
+
+test('an account change during draft restoration cannot apply the original account quote or overwrite its draft', async () => {
+  const state = runtime({ delayedGet: true }); state.page.initialQuote = '[quote]Private quoted words[/quote]';
+  state.page.presentationShown(); await state.getEntered;
+  state.session.user = { id: 8 }; state.session.revision++; state.page.accountChanged();
+  state.releaseGet('previously saved draft'); await settle();
+  assert.equal(state.page.draft, ''); assert.equal(state.page.draftLoaded, false);
+  assert.equal(state.saved.get(state.key), 'previously saved draft'); assert.deepEqual(state.puts, []);
+});
+
+test('supplementary draft-list metadata failure cannot prevent the actual draft from being flushed', async () => {
+  const state = runtime(); state.page.presentationShown(); await settle();
+  const store = state.page.store; const originalPut = store.put;
+  let flushes = 0;
+  store.put = async (key, value) => {
+    if (key.startsWith('draft_metadata_v1_')) { throw new Error('fixture metadata unavailable'); }
+    await originalPut(key, value);
+  };
+  store.flush = async () => { flushes++; };
+  state.page.changeDraft('Keep the actual text'); await state.page.saveDraft();
+  assert.equal(state.saved.get(state.key), 'Keep the actual text'); assert.equal(flushes, 1);
+  assert.equal(state.page.saveMessage, '草稿已保存在本机');
 });

@@ -25,11 +25,28 @@ function load(value, modules, globals = {}) {
   return module.exports;
 }
 const http = { RequestMethod: { GET: 'GET', POST: 'POST', PUT: 'PUT', DELETE: 'DELETE' } };
+const modelSource = name => readFileSync(new URL(`../app/entry/src/main/ets/models/${name}.ets`, import.meta.url), 'utf8');
+// Load actual pure local dependencies without opening the native-I/O allowlist.
+const forumModels = load(modelSource('ForumModels'), {});
+const forumWire = load(source('ForumWire'), { '../models/ForumModels': forumModels });
+const userProfileModels = load(modelSource('UserProfileModels'), { './ForumModels': forumModels });
+const userProfileWire = load(source('UserProfileWire'), {
+  '../models/ForumModels': forumModels, '../models/UserProfileModels': userProfileModels, './ForumWire': forumWire
+});
+const directoryModels = load(modelSource('DirectoryModels'), { './ForumModels': forumModels });
+const directoryWire = load(source('DirectoryWire'), { '../models/DirectoryModels': directoryModels, './ForumWire': forumWire });
+const postRevisionModels = load(modelSource('PostRevisionModels'), { './ForumModels': forumModels });
+const postRevisionWire = load(source('PostRevisionWire'), {
+  '../models/ForumModels': forumModels, '../models/PostRevisionModels': postRevisionModels
+});
+const localApiModules = { '../models/UserProfileModels': userProfileModels, './UserProfileWire': userProfileWire,
+  '../models/DirectoryModels': directoryModels, './DirectoryWire': directoryWire,
+  '../models/PostRevisionModels': postRevisionModels, './PostRevisionWire': postRevisionWire };
 const exports = load(source('ForumApi'), {
   '@kit.ArkTS': { url: { URL } },
   '@kit.NetworkKit': { http }, '@kit.ArkWeb': { webview: {} },
   '../models/ForumModels': { safeForumUrl: path => path.startsWith('/') && !path.startsWith('//') ? `https://linux.do${path}` : '' },
-  './ForumWire': {}
+  './ForumWire': {}, ...localApiModules
 });
 const { ForumApi, ForumApiError, ForumErrorKind: Kind, RequestCancellation, READ_SESSION_RECOVERY_TIMEOUT_MS } = exports;
 const mediaPolicy = load(source('BrowserMediaPolicy'), { '@kit.ArkTS': { url: { URL } } });
@@ -153,7 +170,7 @@ test('native session-cookie rotations and revocations flush promptly without cha
           async fetchCookie() { return ''; }, configCookieSync(...args) { saved.push(args); },
           async saveCookieAsync() { flushes++; if (diskFails) { throw new Error('fixture disk failure'); } }
         } } },
-        '../models/ForumModels': { safeForumUrl: path => `https://linux.do${path}` }, './ForumWire': {}
+        '../models/ForumModels': { safeForumUrl: path => `https://linux.do${path}` }, './ForumWire': {}, ...localApiModules
       });
       const api = new native.ForumApi();
       api.waitForSlot = async () => {};
@@ -259,7 +276,7 @@ test('the shared deadline releases callers even if a recovery handler never reso
   const isolated = load(source('ForumApi'), {
     '@kit.ArkTS': { url: { URL } },
     '@kit.NetworkKit': { http }, '@kit.ArkWeb': { webview: {} },
-    '../models/ForumModels': { safeForumUrl: path => `https://linux.do${path}` }, './ForumWire': {}
+    '../models/ForumModels': { safeForumUrl: path => `https://linux.do${path}` }, './ForumWire': {}, ...localApiModules
   }, { setTimeout: (callback, delay) => { deadlines.push(delay); queueMicrotask(callback); return 1; }, clearTimeout() {} });
   const api = new isolated.ForumApi();
   let token;
