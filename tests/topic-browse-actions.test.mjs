@@ -1,12 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-const ts = require('/Applications/DevEco-Studio.app/Contents/tools/hvigor/hvigor/node_modules/typescript/lib/typescript.js');
+const compiler = [process.env.DEVECO_TYPESCRIPT_PATH,
+  '/Applications/DevEco-Studio.app/Contents/tools/hvigor/hvigor/node_modules/typescript/lib/typescript.js',
+  '/Applications/DevEco-Studio.app/Contents/tools/arktsdoc/node_modules/typescript/lib/typescript.js'
+].find(candidate => candidate && existsSync(candidate));
+assert.ok(compiler, 'TypeScript is required; set DEVECO_TYPESCRIPT_PATH for another installation.');
+const ts = require(compiler);
 const root = fileURLToPath(new URL('../app/entry/src/main/ets/', import.meta.url));
 const modules = new Map();
 const methods = { GET: 'GET', POST: 'POST', PUT: 'PUT', DELETE: 'DELETE' };
